@@ -1,134 +1,149 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="te">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sahay AI - Prudence Hospitals</title>
+    <title>Sahay - Prudence Health Assistant</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
-        .chat-container { height: calc(100vh - 160px); }
-        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;700&display=swap');
+        body { font-family: 'Noto Sans Telugu', sans-serif; background: #f8fafc; }
+        .dot { animation: wave 1.3s linear infinite; }
+        .dot:nth-child(2) { animation-delay: -1.1s; }
+        .dot:nth-child(3) { animation-delay: -0.9s; }
+        @keyframes wave { 0%, 60%, 100% { transform: initial; } 30% { transform: translateY(-5px); } }
     </style>
 </head>
-<body class="bg-slate-50 font-sans text-slate-900">
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-    <!-- Header -->
-    <header class="bg-blue-600 text-white p-4 shadow-lg sticky top-0 z-10">
-        <div class="max-w-4xl mx-auto flex justify-between items-center">
-            <h1 class="text-xl font-bold flex items-center">
-                <i class="fas fa-hospital-user mr-2"></i> PRUDENCE HOSPITALS
-            </h1>
-            <span class="text-sm bg-blue-500 px-3 py-1 rounded-full">Sahay AI (Live)</span>
-        </div>
-    </header>
+        function App() {
+            const [history, setHistory] = useState([
+                { role: 'model', parts: [{ text: "నమస్కారం! నేను సహాయ్, మీ AI ఆరోగ్య సహాయకుడిని. నేను మీకు ఎలా సహాయపడగలను?" }] }
+            ]);
+            const [status, setStatus] = useState('idle');
+            const [inputText, setInputText] = useState('');
+            const chatEndRef = useRef(null);
+            const audioRef = useRef(null);
+            const recognitionRef = useRef(null);
 
-    <!-- Chat Area -->
-    <main class="max-w-4xl mx-auto p-4">
-        <div id="chat-box" class="chat-container overflow-y-auto space-y-4 mb-4 p-2">
-            <!-- Messages appear here -->
-            <div class="flex justify-start">
-                <div class="bg-white p-4 rounded-2xl shadow-sm border max-w-[80%]">
-                    నమస్కారం! నేను సహాయ్. మీకు ఎలా సహాయం చేయగలను?
+            useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
+
+            // NEW: Updated Voice Output to call our secure Netlify function
+            const playVoice = async (text) => {
+                setStatus('speaking');
+                try {
+                    const response = await fetch('/.netlify/functions/textToSpeech', {
+                        method: 'POST',
+                        body: JSON.stringify({ text }),
+                    });
+                    const data = await response.json();
+                    if (data.audioContent) {
+                        audioRef.current.src = `data:audio/mp3;base64,${data.audioContent}`;
+                        audioRef.current.play();
+                    } else {
+                        setStatus('idle');
+                    }
+                } catch (error) {
+                    console.error("TTS Error:", error);
+                    setStatus('idle');
+                }
+            };
+
+            const getAiReply = async (currentHistory) => {
+                setStatus('thinking');
+                try {
+                    const response = await fetch('/.netlify/functions/getAiResponse', {
+                        method: 'POST',
+                        body: JSON.stringify({ history: currentHistory }),
+                    });
+                    const data = await response.json();
+                    const aiReply = data.reply || "క్షమించండి.";
+                    setHistory([...currentHistory, { role: 'model', parts: [{ text: aiReply }] }]);
+                    playVoice(aiReply);
+                } catch (error) {
+                    setStatus('idle');
+                }
+            };
+
+            const handleTextSubmit = (e) => {
+                e.preventDefault();
+                if (!inputText.trim() || status !== 'idle') return;
+                const newHistory = [...history, { role: 'user', parts: [{ text: inputText }] }];
+                setHistory(newHistory);
+                setInputText('');
+                getAiReply(newHistory);
+            };
+
+            useEffect(() => {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognition) return;
+                const rec = new SpeechRecognition();
+                rec.lang = 'te-IN';
+                rec.onstart = () => setStatus('listening');
+                rec.onend = () => setStatus('idle');
+                rec.onresult = (e) => {
+                    const text = e.results[0][0].transcript;
+                    const newHistory = [...history, { role: 'user', parts: [{ text }] }];
+                    setHistory(newHistory);
+                    getAiReply(newHistory);
+                };
+                recognitionRef.current = rec;
+            }, [history]);
+
+            return (
+                <div className="flex items-center justify-center min-h-screen p-4">
+                    <audio ref={audioRef} onEnded={() => setStatus('idle')} className="hidden" />
+                    <div className="w-full max-w-md h-[85vh] bg-white rounded-3xl shadow-xl flex flex-col overflow-hidden border">
+                        <div className="bg-blue-600 p-6 text-white text-center">
+                            <h1 className="font-bold uppercase tracking-widest text-sm">Prudence Hospitals</h1>
+                            <p className="text-xs opacity-80">Sahay AI Assistant</p>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+                            {history.map((turn, i) => (
+                                <div key={i} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`p-3 rounded-2xl max-w-[80%] text-sm ${turn.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border shadow-sm'}`}>
+                                        {turn.parts[0].text}
+                                    </div>
+                                </div>
+                            ))}
+                            {status === 'thinking' && <div className="text-blue-500 text-xs">Sahay is thinking...</div>}
+                            <div ref={chatEndRef} />
+                        </div>
+
+                        <div className="p-4 border-t flex gap-2 items-center">
+                            <button 
+                                onClick={() => recognitionRef.current?.start()}
+                                className={`w-12 h-12 rounded-full flex items-center justify-center ${status === 'listening' ? 'bg-red-500 text-white animate-pulse' : 'bg-gray-100 text-gray-500'}`}
+                            >
+                                <i className="fas fa-microphone"></i>
+                            </button>
+                            <form onSubmit={handleTextSubmit} className="flex-1 flex gap-2">
+                                <input 
+                                    className="flex-1 border rounded-xl px-4 py-2 outline-none focus:border-blue-500"
+                                    value={inputText}
+                                    onChange={(e) => setInputText(e.target.value)}
+                                    placeholder="Type in Telugu..."
+                                    disabled={status !== 'idle'}
+                                />
+                                <button type="submit" className="bg-blue-600 text-white w-12 h-12 rounded-xl">
+                                    <i className="fas fa-paper-plane"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- Input Area -->
-        <div class="fixed bottom-0 left-0 right-0 p-4 bg-slate-50 border-t">
-            <div class="max-w-4xl mx-auto flex gap-2">
-                <input type="text" id="user-input" placeholder="Type in Telugu..." 
-                    class="flex-1 p-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm">
-                <button onclick="sendMessage()" class="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 transition shadow-md">
-                    <i class="fas fa-paper-plane"></i>
-                </button>
-            </div>
-        </div>
-    </main>
-
-    <script>
-        let chatHistory = [];
-
-        // --- NEW: BROWSER NATIVE VOICE FUNCTION (NO API KEY NEEDED) ---
-        function speakTelugu(text) {
-            // Cancel any current speech
-            window.speechSynthesis.cancel();
-
-            const utterance = new SpeechSynthesisUtterance(text);
-            
-            // Try to find a Telugu voice installed on the device
-            const voices = window.speechSynthesis.getVoices();
-            const teluguVoice = voices.find(v => v.lang.includes('te') || v.lang.includes('TEL'));
-            
-            if (teluguVoice) {
-                utterance.voice = teluguVoice;
-            }
-            
-            utterance.lang = 'te-IN';
-            utterance.rate = 0.9; // Slightly slower for clarity
-            utterance.pitch = 1.0;
-
-            window.speechSynthesis.speak(utterance);
+            );
         }
-
-        async function sendMessage() {
-            const input = document.getElementById('user-input');
-            const text = input.value.trim();
-            if (!text) return;
-
-            // Add user message to UI
-            addMessage(text, 'user');
-            input.value = '';
-
-            // Add to history
-            chatHistory.push({ role: "user", parts: [{ text }] });
-
-            // Show thinking
-            const thinkingId = addMessage("Thinking...", 'ai');
-
-            try {
-                const response = await fetch('/.netlify/functions/getAiResponse', {
-                    method: 'POST',
-                    body: JSON.stringify({ history: chatHistory })
-                });
-
-                const data = await response.json();
-                const aiReply = data.reply;
-
-                // Remove thinking and add real reply
-                document.getElementById(thinkingId).remove();
-                addMessage(aiReply, 'ai');
-
-                // SPEAK THE REPLY (Using Plan B: Browser Voice)
-                speakTelugu(aiReply);
-
-                chatHistory.push({ role: "model", parts: [{ text: aiReply }] });
-            } catch (err) {
-                document.getElementById(thinkingId).innerText = "Error communicating with Sahay.";
-            }
-        }
-
-        function addMessage(text, sender) {
-            const chatBox = document.getElementById('chat-box');
-            const id = 'msg-' + Date.now();
-            const div = document.createElement('div');
-            div.id = id;
-            div.className = `flex ${sender === 'user' ? 'justify-end' : 'justify-start'}`;
-            
-            const inner = document.createElement('div');
-            inner.className = sender === 'user' 
-                ? "bg-blue-600 text-white p-4 rounded-2xl shadow-md max-w-[80%]" 
-                : "bg-white p-4 rounded-2xl shadow-sm border max-w-[80%]";
-            
-            inner.innerText = text;
-            div.appendChild(inner);
-            chatBox.appendChild(div);
-            chatBox.scrollTop = chatBox.scrollHeight;
-            return id;
-        }
-
-        // Initialize voices (some browsers need this)
-        window.speechSynthesis.getVoices();
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>

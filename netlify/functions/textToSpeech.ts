@@ -1,30 +1,25 @@
-import { Handler } from '@netlify/functions';
+const fetch = require('node-fetch');
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json'
-};
+exports.handler = async (event) => {
+  // CORS Headers
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Content-Type': 'application/json'
+  };
 
-export const handler: Handler = async (event) => {
-  // Handle CORS
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
   }
 
-  const { text } = JSON.parse(event.body || '{}');
-  const apiKey = process.env.GOOGLE_API_KEY; // This is where your new key goes
-
-  if (!text) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: "No text provided" }) };
-  }
-
-  if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "Google API Key missing in Netlify" }) };
-  }
-
   try {
-    // We use the REST API directly because it's faster and works better with a simple API Key
+    const { text } = JSON.parse(event.body);
+    const apiKey = process.env.GOOGLE_TTS_API_KEY;
+
+    if (!apiKey) {
+      throw new Error("Google TTS API Key is missing in Netlify settings.");
+    }
+
     const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
 
     const response = await fetch(url, {
@@ -34,7 +29,8 @@ export const handler: Handler = async (event) => {
         input: { text },
         voice: { 
           languageCode: 'te-IN', 
-          name: 'te-IN-Standard-A' // Telugu Female Voice
+          name: 'te-IN-Standard-A', // High quality Telugu voice
+          ssmlGender: 'FEMALE' 
         },
         audioConfig: { audioEncoding: 'MP3' }
       })
@@ -51,13 +47,12 @@ export const handler: Handler = async (event) => {
       headers,
       body: JSON.stringify({ audioContent: data.audioContent })
     };
-
-  } catch (error: any) {
+  } catch (error) {
     console.error("TTS Error:", error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "Failed to generate voice", details: error.message })
+      body: JSON.stringify({ error: error.message })
     };
   }
 };
