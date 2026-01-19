@@ -18,59 +18,49 @@ export const handler: Handler = async (event) => {
 
   const apiKey = process.env.GEMINI_API_KEY || "";
   if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "AI configuration error." }) };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "AI configuration error: API Key missing." }) };
   }
-
-  const body = JSON.parse(event.body || '{}');
-  const { history } = body;
-
-  if (!history || !Array.isArray(history)) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: "No history provided." }) };
-  }
-
-  const todayStr = getFormattedDate(new Date());
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = getFormattedDate(tomorrow);
-
-  // --- SYSTEM PROMPT (The Sahay Personality) ---
-  const systemPrompt = `
-    You are Sahay, a helpful AI medical assistant for Prudence Hospitals.
-    
-    **MANDATORY: ALWAYS SPEAK IN TELUGU.**
-    
-    Internal Context:
-    - Today is ${todayStr}.
-    - Tomorrow is ${tomorrowStr}.
-    
-    Workflow:
-    1. Greet the user in Telugu.
-    2. Identify symptoms or the required specialty.
-    3. Use 'getDoctorDetails' to find matching doctors.
-    4. Ask the user to confirm a specific doctor.
-    5. Check 'getAvailableSlots' for the chosen date.
-    6. Collect patient name and phone number.
-    7. Use 'bookAppointment' for the final transaction.
-    
-    Rules:
-    - Silently convert natural dates (like "tomorrow") to YYYY-MM-DD for tool calls.
-    - Never mention technical date formats to the user.
-    - Confirm all details before booking.
-  `;
 
   try {
+    const body = JSON.parse(event.body || '{}');
+    const { history } = body;
+
+    if (!history || !Array.isArray(history)) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: "No history provided." }) };
+    }
+
+    const todayStr = getFormattedDate(new Date());
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = getFormattedDate(tomorrow);
+
+    // --- SYSTEM PROMPT ---
+    const systemPrompt = `
+      You are Sahay, a helpful AI medical assistant for Prudence Hospitals.
+      ALWAYS SPEAK IN TELUGU.
+      Today is ${todayStr}. Tomorrow is ${tomorrowStr}.
+      
+      Workflow:
+      1. Greet in Telugu.
+      2. Identify symptoms/specialty.
+      3. Use 'getDoctorDetails' to find doctors.
+      4. Confirm a doctor with the user.
+      5. Check 'getAvailableSlots' for the date.
+      6. Collect patient name and phone.
+      7. Use 'bookAppointment' to finish.
+    `;
+
     const genAI = new GoogleGenerativeAI(apiKey);
+    
+    // FIX: Using the most stable model identifier
     const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
+      model: "gemini-1.5-flash", 
       tools: [{
         functionDeclarations: [
-          {
-            name: "getAllSpecialties",
-            description: "Gets all clinical specialties available at Prudence Hospitals."
-          },
-          {
-            name: "getDoctorDetails",
-            description: "Finds doctors by name or specialty.",
+          { name: "getAllSpecialties", description: "Gets clinical specialties." },
+          { 
+            name: "getDoctorDetails", 
+            description: "Finds doctors.",
             parameters: {
               type: "OBJECT",
               properties: {
@@ -81,20 +71,19 @@ export const handler: Handler = async (event) => {
           },
           {
             name: "getAvailableSlots",
-            description: "Checks availability for a specific doctor and date.",
+            description: "Checks availability.",
             parameters: {
               type: "OBJECT",
               properties: {
                 doctorName: { type: "STRING" },
-                date: { type: "STRING", description: "Format: YYYY-MM-DD" },
-                timeOfDay: { type: "STRING", enum: ["morning", "afternoon", "evening"] }
+                date: { type: "STRING", description: "YYYY-MM-DD" }
               },
               required: ["doctorName", "date"]
             }
           },
           {
             name: "bookAppointment",
-            description: "Executes the final appointment booking.",
+            description: "Finalizes booking.",
             parameters: {
               type: "OBJECT",
               properties: {
@@ -122,13 +111,18 @@ export const handler: Handler = async (event) => {
     const userMessage = history[history.length - 1].parts[0].text;
     const result = await chat.sendMessage(userMessage);
     const response = result.response;
+    
+    // Check for tool calls
     const calls = response.functionCalls();
 
     if (calls && calls.length > 0) {
       const call = calls[0];
+      // Determine the URL for the tool call
       const host = event.headers.host || 'localhost:8888';
       const protocol = host.includes('localhost') ? 'http' : 'https';
       const toolUrl = `${protocol}://${host}/.netlify/functions/${call.name}`;
+
+      console.log(`Calling tool: ${call.name}`);
 
       const toolResponse = await fetch(toolUrl, {
         method: 'POST',
@@ -138,7 +132,7 @@ export const handler: Handler = async (event) => {
 
       const toolData = await toolResponse.json();
 
-      // Send the tool data back to the LLM to get the final Telugu response
+      // Send the tool results back to AI for final Telugu reply
       const finalResult = await chat.sendMessage([{
         functionResponse: {
           name: call.name,
@@ -164,7 +158,7 @@ export const handler: Handler = async (event) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "I'm having trouble thinking in Telugu right now. Please try again." })
+      body: JSON.stringify({ error: "I'm having trouble thinking in Telugu. Please try again.", details: error.message })
     };
   }
 };

@@ -1,8 +1,9 @@
 [build]
+  # We leave 'command' empty so Netlify doesn't try to run Vite
+  command = ""
   publish = "public"
   functions = "netlify/functions"
 
 [dev]
   port = 8888
   publish = "public"
-  
