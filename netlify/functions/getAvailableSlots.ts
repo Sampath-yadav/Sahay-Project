@@ -1,10 +1,5 @@
-// FILE: netlify/functions/getAvailableSlots.ts
-// This is the complete and corrected version.
-// It fixes the "HandlerNotFound" error by correctly exporting the handler
-// and uses an exact match for the doctor's name for improved reliability.
-
-import { createClient } from '@supabase/supabase-js';
-import type { Handler, HandlerEvent } from '@netlify/functions';
+import { Handler } from '@netlify/functions';
+import { supabase } from './lib/supabaseClient';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -12,92 +7,100 @@ const headers = {
   'Content-Type': 'application/json'
 };
 
-// The 'export' keyword is the critical fix for the "HandlerNotFound" error.
-export const handler: Handler = async (event: HandlerEvent) => {
-    if (event.httpMethod === 'OPTIONS') {
-        return { statusCode: 200, headers };
+export const handler: Handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers };
+  }
+
+  try {
+    const { doctorName, date, timeOfDay } = JSON.parse(event.body || '{}');
+
+    if (!doctorName || !date) {
+      return { 
+        statusCode: 400, 
+        headers, 
+        body: JSON.stringify({ error: "Doctor name and date are required." }) 
+      };
     }
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-        return { statusCode: 500, headers, body: JSON.stringify({ error: "Database configuration error." }) };
+
+    // 1. Fetch Doctor ID and Working Hours
+    const { data: doctorData, error: doctorError } = await supabase
+      .from('doctors')
+      .select('id, working_hours_start, working_hours_end')
+      .ilike('name', `%${doctorName}%`)
+      .single();
+
+    if (doctorError || !doctorData) {
+      return { 
+        statusCode: 404, 
+        headers, 
+        body: JSON.stringify({ success: false, message: `Doctor ${doctorName} not found.` }) 
+      };
     }
-    try {
-        const { doctorName, date, timeOfDay } = JSON.parse(event.body || '{}');
-        if (!doctorName || !date) {
-            return { statusCode: 400, headers, body: JSON.stringify({ error: "Doctor name and date are required." }) };
-        }
 
-        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+    // 2. Generate all possible 30-minute slots based on working hours
+    const allPossibleSlots: string[] = [];
+    const [startHour, startMinute] = doctorData.working_hours_start.split(':').map(Number);
+    const [endHour, endMinute] = doctorData.working_hours_end.split(':').map(Number);
+    
+    let currentHour = startHour;
+    let currentMinute = startMinute;
 
-        // This query now uses .eq() for a reliable, exact match on the doctor's name.
-        const { data: doctorData, error: doctorError } = await supabase
-            .from('doctors')
-            .select('id, working_hours_start, working_hours_end')
-            .eq('name', doctorName)
-            .single();
-
-        if (doctorError || !doctorData) {
-            return { statusCode: 404, headers, body: JSON.stringify({ success: false, message: `Could not find a doctor with the exact name ${doctorName}.` }) };
-        }
-        
-        if (!doctorData.working_hours_start || !doctorData.working_hours_end) {
-             return { statusCode: 404, headers, body: JSON.stringify({ success: false, message: `Schedule not found for ${doctorName}.` }) };
-        }
-
-        const allPossibleSlots = [];
-        const slotDuration = 30; // 30-minute slots
-        const [startHour, startMinute] = doctorData.working_hours_start.split(':').map(Number);
-        const [endHour, endMinute] = doctorData.working_hours_end.split(':').map(Number);
-        let currentHour = startHour, currentMinute = startMinute;
-
-        while (currentHour < endHour || (currentHour === endHour && currentMinute < endMinute)) {
-            allPossibleSlots.push(`${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`);
-            currentMinute += slotDuration;
-            if (currentMinute >= 60) {
-                currentHour++;
-                currentMinute -= 60;
-            }
-        }
-
-        const { data: bookedAppointments, error: bookedError } = await supabase
-            .from('appointments')
-            .select('appointment_time')
-            .eq('doctor_id', doctorData.id)
-            .eq('appointment_date', date)
-            .eq('status', 'confirmed');
-
-        if (bookedError) throw bookedError;
-        
-        const bookedTimes = bookedAppointments.map(appt => appt.appointment_time.substring(0, 5));
-        const availableSlots = allPossibleSlots.filter(slot => !bookedTimes.includes(slot));
-
-        const availableMorning = availableSlots.filter(slot => parseInt(slot.split(':')[0]) < 12);
-        const availableAfternoon = availableSlots.filter(slot => parseInt(slot.split(':')[0]) >= 12 && parseInt(slot.split(':')[0]) < 17);
-        const availableEvening = availableSlots.filter(slot => parseInt(slot.split(':')[0]) >= 17);
-
-        // If 'timeOfDay' is not specified, return the general periods that have openings.
-        if (!timeOfDay) {
-            const availablePeriods = [];
-            if (availableMorning.length > 0) availablePeriods.push('morning');
-            if (availableAfternoon.length > 0) availablePeriods.push('afternoon');
-            if (availableEvening.length > 0) availablePeriods.push('evening');
-            return { statusCode: 200, headers, body: JSON.stringify({ success: true, availablePeriods }) };
-        }
-
-        // If 'timeOfDay' is specified, return the specific slots for that period.
-        switch (timeOfDay.toLowerCase()) {
-            case 'morning':
-                return { statusCode: 200, headers, body: JSON.stringify({ success: true, availableSlots: availableMorning }) };
-            case 'afternoon':
-                return { statusCode: 200, headers, body: JSON.stringify({ success: true, availableSlots: availableAfternoon }) };
-            case 'evening':
-                return { statusCode: 200, headers, body: JSON.stringify({ success: true, availableSlots: availableEvening }) };
-            default:
-                return { statusCode: 400, headers, body: JSON.stringify({ success: false, message: "Invalid time of day specified. Please use 'morning', 'afternoon', or 'evening'." }) };
-        }
-
-    } catch (error: any) {
-        console.error("Error in getAvailableSlots:", error);
-        return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: error.message }) };
+    while (currentHour < endHour || (currentHour === endHour && currentMinute < endMinute)) {
+      allPossibleSlots.push(
+        `${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')}`
+      );
+      currentMinute += 30;
+      if (currentMinute >= 60) {
+        currentHour++;
+        currentMinute -= 60;
+      }
     }
+
+    // 3. Fetch already booked appointments for this doctor/date
+    const { data: bookedAppointments, error: bookedError } = await supabase
+      .from('appointments')
+      .select('appointment_time')
+      .eq('doctor_id', doctorData.id)
+      .eq('appointment_date', date)
+      .eq('status', 'confirmed');
+
+    if (bookedError) throw bookedError;
+
+    // 4. Filter out booked slots
+    const bookedTimes = bookedAppointments.map(appt => appt.appointment_time.substring(0, 5));
+    const availableSlots = allPossibleSlots.filter(slot => !bookedTimes.includes(slot));
+
+    // 5. Categorize slots for AI context
+    const morning = availableSlots.filter(s => parseInt(s.split(':')[0]) < 12);
+    const afternoon = availableSlots.filter(s => parseInt(s.split(':')[0]) >= 12 && parseInt(s.split(':')[0]) < 17);
+    const evening = availableSlots.filter(s => parseInt(s.split(':')[0]) >= 17);
+
+    // 6. Return response based on AI query (General or Specific)
+    if (!timeOfDay) {
+      const availablePeriods = [];
+      if (morning.length > 0) availablePeriods.push('morning');
+      if (afternoon.length > 0) availablePeriods.push('afternoon');
+      if (evening.length > 0) availablePeriods.push('evening');
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, availablePeriods }) };
+    }
+
+    const filteredSlots = 
+      timeOfDay.toLowerCase() === 'morning' ? morning :
+      timeOfDay.toLowerCase() === 'afternoon' ? afternoon :
+      timeOfDay.toLowerCase() === 'evening' ? evening : [];
+
+    return { 
+      statusCode: 200, 
+      headers, 
+      body: JSON.stringify({ success: true, availableSlots: filteredSlots }) 
+    };
+
+  } catch (error: any) {
+    return { 
+      statusCode: 500, 
+      headers, 
+      body: JSON.stringify({ success: false, message: error.message }) 
+    };
+  }
 };
-

@@ -1,176 +1,170 @@
-// FILE: netlify/functions/getAiResponse.ts
-// This is a complete, robust, and corrected version of your AI handler.
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { Handler } from '@netlify/functions';
 
-import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
-import { createClient } from '@supabase/supabase-js';
-import type { Handler, HandlerEvent } from '@netlify/functions';
-
-// --- CONFIGURATION ---
-// Centralized configuration for easier management.
-const MODEL_NAME = "gemini-pro";
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-
-// --- INITIALIZATION & PRE-FLIGHT CHECKS ---
-// Ensure all required environment variables are present before starting.
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !GEMINI_API_KEY) {
-    throw new Error("Missing required environment variables (Supabase URL/Key or Gemini API Key).");
-}
-
-// Initialize Supabase and Gemini clients once.
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-
-// --- CORS HEADERS ---
 const headers = {
-    'Access-Control-Allow-Origin': '*', // Allow requests from any origin
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Content-Type': 'application/json'
 };
 
-// --- DATABASE HELPER FUNCTIONS ---
-
-// In-memory cache for doctor specialties to reduce database calls.
-const specialtyCache = {
-    specialties: null as string[] | null,
-    lastFetched: 0,
-    ttl: 3600 * 1000 // Cache for 1 hour
+const getFormattedDate = (date: Date): string => {
+  return date.toISOString().split('T')[0];
 };
 
-/**
- * Fetches the list of unique doctor specialties from the database, with caching.
- */
-async function getSpecialties(): Promise<string[]> {
-    const now = Date.now();
-    if (specialtyCache.specialties && (now - specialtyCache.lastFetched < specialtyCache.ttl)) {
-        return specialtyCache.specialties;
-    }
-    console.log("Fetching specialties from database...");
-    const { data, error } = await supabase.from('doctors').select('specialty');
-    if (error) {
-        console.error("Error fetching specialties:", error);
-        return [];
-    }
-    const uniqueSpecialties = [...new Set((data || []).map(doc => doc.specialty))];
-    specialtyCache.specialties = uniqueSpecialties;
-    specialtyCache.lastFetched = now;
-    return uniqueSpecialties;
-};
+export const handler: Handler = async (event) => {
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: JSON.stringify({ message: 'CORS preflight successful' }) };
+  }
 
-/**
- * Retrieves the conversation history for a given session ID.
- */
-async function getHistoryFromSupabase(sessionId: string): Promise<any[]> {
-    const { data, error } = await supabase.from('conversations').select('history').eq('session_id', sessionId).single();
-    // A "PGRST116" error is normal if no history exists yet, so we ignore it.
-    if (error && error.code !== 'PGRST116') {
-        console.error("Error fetching history:", error);
-        return [];
-    }
-    return data?.history || [];
-}
+  const apiKey = process.env.GEMINI_API_KEY || "";
+  if (!apiKey) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "AI configuration error." }) };
+  }
 
-/**
- * Saves or updates the conversation history for a given session ID.
- */
-async function saveHistoryToSupabase(sessionId: string, history: any[]): Promise<void> {
-    const { error } = await supabase.from('conversations').upsert({
-        session_id: sessionId,
-        history: history,
-        last_updated: new Date().toISOString()
+  const body = JSON.parse(event.body || '{}');
+  const { history } = body;
+
+  if (!history || !Array.isArray(history)) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: "No history provided." }) };
+  }
+
+  const todayStr = getFormattedDate(new Date());
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = getFormattedDate(tomorrow);
+
+  // --- SYSTEM PROMPT (The Sahay Personality) ---
+  const systemPrompt = `
+    You are Sahay, a helpful AI medical assistant for Prudence Hospitals.
+    
+    **MANDATORY: ALWAYS SPEAK IN TELUGU.**
+    
+    Internal Context:
+    - Today is ${todayStr}.
+    - Tomorrow is ${tomorrowStr}.
+    
+    Workflow:
+    1. Greet the user in Telugu.
+    2. Identify symptoms or the required specialty.
+    3. Use 'getDoctorDetails' to find matching doctors.
+    4. Ask the user to confirm a specific doctor.
+    5. Check 'getAvailableSlots' for the chosen date.
+    6. Collect patient name and phone number.
+    7. Use 'bookAppointment' for the final transaction.
+    
+    Rules:
+    - Silently convert natural dates (like "tomorrow") to YYYY-MM-DD for tool calls.
+    - Never mention technical date formats to the user.
+    - Confirm all details before booking.
+  `;
+
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      tools: [{
+        functionDeclarations: [
+          {
+            name: "getAllSpecialties",
+            description: "Gets all clinical specialties available at Prudence Hospitals."
+          },
+          {
+            name: "getDoctorDetails",
+            description: "Finds doctors by name or specialty.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                doctorName: { type: "STRING" },
+                specialty: { type: "STRING" }
+              }
+            }
+          },
+          {
+            name: "getAvailableSlots",
+            description: "Checks availability for a specific doctor and date.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                doctorName: { type: "STRING" },
+                date: { type: "STRING", description: "Format: YYYY-MM-DD" },
+                timeOfDay: { type: "STRING", enum: ["morning", "afternoon", "evening"] }
+              },
+              required: ["doctorName", "date"]
+            }
+          },
+          {
+            name: "bookAppointment",
+            description: "Executes the final appointment booking.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                doctorName: { type: "STRING" },
+                patientName: { type: "STRING" },
+                phone: { type: "STRING" },
+                date: { type: "STRING" },
+                time: { type: "STRING" }
+              },
+              required: ["doctorName", "patientName", "phone", "date", "time"]
+            }
+          }
+        ]
+      }]
     });
-    if (error) {
-        console.error("Error saving history:", error);
-    }
-}
 
-// --- MAIN NETLIFY HANDLER ---
+    const chat = model.startChat({
+      history: [
+        { role: "user", parts: [{ text: systemPrompt }] },
+        { role: "model", parts: [{ text: "అర్థమైంది. నేను సహాయ్ గా తెలుగులో మీకు సహాయం చేస్తాను." }] },
+        ...history.slice(0, -1)
+      ]
+    });
 
-export const handler: Handler = async (event: HandlerEvent) => {
-    // Handle CORS preflight requests
-    if (event.httpMethod === 'OPTIONS') {
-        return { statusCode: 200, headers, body: JSON.stringify({ message: 'CORS preflight successful' }) };
-    }
+    const userMessage = history[history.length - 1].parts[0].text;
+    const result = await chat.sendMessage(userMessage);
+    const response = result.response;
+    const calls = response.functionCalls();
 
-    try {
-        const { sessionId, userMessage } = JSON.parse(event.body || '{}');
-        if (!sessionId || !userMessage) {
-            return { statusCode: 400, headers, body: JSON.stringify({ error: "sessionId and userMessage are required." }) };
+    if (calls && calls.length > 0) {
+      const call = calls[0];
+      const host = event.headers.host || 'localhost:8888';
+      const protocol = host.includes('localhost') ? 'http' : 'https';
+      const toolUrl = `${protocol}://${host}/.netlify/functions/${call.name}`;
+
+      const toolResponse = await fetch(toolUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(call.args)
+      });
+
+      const toolData = await toolResponse.json();
+
+      // Send the tool data back to the LLM to get the final Telugu response
+      const finalResult = await chat.sendMessage([{
+        functionResponse: {
+          name: call.name,
+          response: toolData
         }
+      }]);
 
-        const specialtyListString = (await getSpecialties()).join(', ');
-        const today = new Date();
-        const getFormattedDate = (date: Date): string => date.toISOString().split('T')[0];
-
-        // --- SYSTEM INSTRUCTION (The AI's Core Rules) ---
-        const systemInstruction = `You are Sahay, a friendly AI medical appointment assistant for Prudence Hospitals in Hyderabad. Your entire response MUST be ONLY in Telugu script. You are STRICTLY FORBIDDEN from including English translations. Today's date is ${getFormattedDate(today)}. Available specialties are: [${specialtyListString}]. Follow your workflows strictly.`; // A concise version of your detailed prompt. You can paste your full prompt here.
-
-        // --- MODEL CONFIGURATION ---
-        const model = genAI.getGenerativeModel({
-            model: MODEL_NAME,
-            // Safety settings to reduce the chance of the model refusing to answer.
-            safetySettings: [
-                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            ],
-            // Define the tools (functions) the AI can use.
-            tools: [{
-                functionDeclarations: [
-                    // Paste your full function declarations here
-                    { name: "getDoctorDetails", description: "Finds doctors by specialty.", parameters: { type: "OBJECT", properties: { specialty: { type: "STRING" } }, required: ["specialty"] } },
-                    { name: "bookAppointment", description: "Books a medical appointment.", parameters: { type: "OBJECT", properties: { doctorName: { type: "STRING" }, patientName: { type: "STRING" }, phone: { type: "STRING" }, date: { type: "STRING" }, time: { type: "STRING" } }, required: ["doctorName", "patientName", "phone", "date", "time"] } },
-                    // ... include all your other tools (cancel, reschedule, etc.)
-                ]
-            }],
-        });
-        
-        const history = await getHistoryFromSupabase(sessionId);
-
-        // --- CORRECTED SDK USAGE ---
-        // Start the chat session, providing the system instruction here.
-        const chat = model.startChat({
-            history,
-            systemInstruction: { role: "system", parts: [{ text: systemInstruction }] }
-        });
-
-        const result = await chat.sendMessage(userMessage);
-        const response = result.response;
-        const functionCalls = response.functionCalls();
-
-        // If the AI decides to use a tool...
-        if (functionCalls && functionCalls.length > 0) {
-            const host = event.headers.host || 'sahayhealth.netlify.app';
-            
-            const toolPromises = functionCalls.map(call => {
-                console.log(`AI is calling tool: ${call.name} with args:`, call.args);
-                const toolUrl = `https://${host}/.netlify/functions/${call.name}`;
-                return fetch(toolUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(call.args),
-                }).then(async toolResponse => {
-                    const toolResult = toolResponse.ok ? await toolResponse.json() : { error: `Tool call to ${call.name} failed with status ${toolResponse.status}` };
-                    return { functionResponse: { name: call.name, response: toolResult } };
-                });
-            });
-
-            const toolResponses = await Promise.all(toolPromises);
-            // Send the tool results back to the AI to get a final text response.
-            const finalResult = await chat.sendMessage(JSON.stringify(toolResponses));
-            await saveHistoryToSupabase(sessionId, await chat.getHistory());
-            
-            return { statusCode: 200, headers, body: JSON.stringify({ reply: finalResult.response.text() }) };
-        }
-
-        // If the AI just wants to chat...
-        await saveHistoryToSupabase(sessionId, await chat.getHistory());
-        return { statusCode: 200, headers, body: JSON.stringify({ reply: response.text() }) };
-
-    } catch (error: any) {
-        console.error("FATAL: Uncaught error in getAiResponse handler.", error);
-        return { statusCode: 500, headers, body: JSON.stringify({ error: "An unexpected error occurred." }) };
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ reply: finalResult.response.text() })
+      };
     }
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ reply: response.text() })
+    };
+
+  } catch (error: any) {
+    console.error("Gemini Error:", error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: "I'm having trouble thinking in Telugu right now. Please try again." })
+    };
+  }
 };
