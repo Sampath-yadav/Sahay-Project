@@ -1,6 +1,11 @@
 {
+  "name": "sahay-project",
+  "version": "1.0.0",
+  "description": "AI Medical Assistant for Prudence Hospitals",
+  "main": "index.js",
+  "type": "commonjs",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/generative-ai": "^0.21.0",
     "@netlify/functions": "^4.1.12",
     "@supabase/supabase-js": "^2.90.1",
     "@tailwindcss/postcss": "^4.1.11",
@@ -9,6 +14,7 @@
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.21",
     "google-auth-library": "^10.5.0",
+    "netlify-cli": "^17.0.0",
     "postcss": "^8.5.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -18,23 +24,15 @@
     "typescript": "^5.8.3",
     "vite": "^7.0.5"
   },
-  "name": "sahay-project",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Sampath-yadav/Sahay-Project.git"
   },
-  "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/Sampath-yadav/Sahay-Project/issues"
-  },
-  "homepage": "https://github.com/Sampath-yadav/Sahay-Project#readme"
+  "license": "ISC"
 }
