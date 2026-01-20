@@ -8,56 +8,59 @@ const headers = {
 };
 
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
+  // Handle the browser's security check (CORS)
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is missing.");
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      throw new Error("GROQ_API_KEY is missing in Netlify settings.");
+    }
 
     const body = JSON.parse(event.body || '{}');
     const { history } = body;
 
-    // 1. We use v1beta and the "-latest" suffix to ensure it finds the model
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+    // Convert the conversation into a format Groq understands
+    // We only take the last message for simplicity, or map the whole history
+    const userMessage = history[history.length - 1].parts[0].text;
 
-    const systemPrompt = "You are Sahay, a medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU. Be helpful and kind.";
+    const payload = {
+      model: "llama-3.3-70b-versatile", // Fast and free-tier friendly model
+      messages: [
+        {
+          role: "system",
+          content: "You are Sahay, an AI medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU. Be polite, concise, and helpful."
+        },
+        {
+          role: "user",
+          content: userMessage
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 1024
+    };
 
-    // 2. Formatting the conversation properly for Google
-    const contents = [
-      {
-        role: "user",
-        parts: [{ text: systemPrompt }]
-      },
-      {
-        role: "model",
-        parts: [{ text: "అర్థమైంది. నేను సహాయ్ గా తెలుగులో మీకు సహాయం చేస్తాను." }]
-      },
-      ...history.map(item => ({
-        role: item.role === 'model' ? 'model' : 'user',
-        parts: item.parts
-      }))
-    ];
-
-    // 3. Make the call
-    const response = await fetch(url, {
+    // Call the Groq API directly
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents })
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
     });
 
     const data = await response.json();
 
-    // 4. Detailed error checking
     if (!response.ok) {
-      console.error("Google API Error Response:", data);
-      throw new Error(data.error?.message || "Google API failed to respond.");
+      console.error("Groq API Error:", data);
+      throw new Error(data.error?.message || "Failed to get response from Groq.");
     }
 
-    if (!data.candidates || !data.candidates[0]) {
-      throw new Error("AI returned an empty response.");
-    }
-
-    const aiReply = data.candidates[0].content.parts[0].text;
+    // Extract the text reply from Groq's response structure
+    const aiReply = data.choices[0].message.content;
 
     return {
       statusCode: 200,
@@ -66,11 +69,14 @@ exports.handler = async (event) => {
     };
 
   } catch (error) {
-    console.error("ULTIMATE ERROR LOG:", error.message);
+    console.error("GROQ_BRAIN_ERROR:", error.message);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "AI Connection Error", details: error.message })
+      body: JSON.stringify({ 
+        error: "Brain connection failed", 
+        details: error.message 
+      })
     };
   }
 };

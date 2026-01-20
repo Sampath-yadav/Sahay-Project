@@ -34,28 +34,38 @@
             const [inputText, setInputText] = useState('');
             const chatEndRef = useRef(null);
             const recognitionRef = useRef(null);
+            // Reference to handle audio playback
+            const audioPlayerRef = useRef(new Audio());
 
             useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
 
-            // PLAN B: Using Browser's built-in Text-to-Speech (FREE)
-            const playVoice = (text) => {
-                if (!window.speechSynthesis) {
-                    console.error("Browser does not support Speech Synthesis");
-                    return;
+            // UPDATED: Using ElevenLabs via Netlify Function
+            const playVoice = async (text) => {
+                try {
+                    setStatus('speaking');
+                    const response = await fetch('/.netlify/functions/textToSpeech', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text }),
+                    });
+
+                    const data = await response.json();
+                    
+                    if (data.audioContent) {
+                        // Play the base64 audio returned by ElevenLabs
+                        audioPlayerRef.current.src = `data:audio/mpeg;base64,${data.audioContent}`;
+                        audioPlayerRef.current.play();
+                        
+                        audioPlayerRef.current.onended = () => setStatus('idle');
+                        audioPlayerRef.current.onerror = () => setStatus('idle');
+                    } else {
+                        console.error("No audio content received");
+                        setStatus('idle');
+                    }
+                } catch (error) {
+                    console.error("Voice Error:", error);
+                    setStatus('idle');
                 }
-
-                // Stop any current speaking
-                window.speechSynthesis.cancel();
-
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'te-IN'; // Telugu language
-                utterance.rate = 0.9;     // Natural speed
-                
-                utterance.onstart = () => setStatus('speaking');
-                utterance.onend = () => setStatus('idle');
-                utterance.onerror = () => setStatus('idle');
-
-                window.speechSynthesis.speak(utterance);
             };
 
             const getAiReply = async (currentHistory) => {
@@ -73,7 +83,7 @@
                     const updatedHistory = [...currentHistory, { role: 'model', parts: [{ text: aiReply }] }];
                     setHistory(updatedHistory);
                     
-                    // Trigger the FREE browser voice
+                    // Trigger ElevenLabs Voice
                     playVoice(aiReply);
                 } catch (error) {
                     console.error("AI Error:", error);
@@ -97,7 +107,7 @@
                 const rec = new SpeechRecognition();
                 rec.lang = 'te-IN';
                 rec.onstart = () => setStatus('listening');
-                rec.onend = () => setStatus('idle');
+                rec.onend = () => { if(status === 'listening') setStatus('idle'); };
                 rec.onresult = (e) => {
                     const text = e.results[0][0].transcript;
                     const newHistory = [...history, { role: 'user', parts: [{ text }] }];
@@ -105,7 +115,7 @@
                     getAiReply(newHistory);
                 };
                 recognitionRef.current = rec;
-            }, [history]);
+            }, [history, status]);
 
             return (
                 <div className="flex items-center justify-center min-h-screen p-2 md:p-6">
@@ -133,12 +143,12 @@
                                     </div>
                                 </div>
                             ))}
-                            {status === 'thinking' && (
+                            {(status === 'thinking' || status === 'speaking') && (
                                 <div className="flex justify-start">
                                     <div className="bg-white px-5 py-4 rounded-2xl rounded-tl-none border border-slate-100 shadow-sm flex items-center space-x-1">
-                                        <div className="w-2 h-2 bg-blue-400 rounded-full dot"></div>
-                                        <div className="w-2 h-2 bg-blue-400 rounded-full dot"></div>
-                                        <div className="w-2 h-2 bg-blue-400 rounded-full dot"></div>
+                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : 'bg-blue-400'} rounded-full dot`}></div>
+                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : 'bg-blue-400'} rounded-full dot`}></div>
+                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : 'bg-blue-400'} rounded-full dot`}></div>
                                     </div>
                                 </div>
                             )}
