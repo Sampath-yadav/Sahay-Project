@@ -1,5 +1,4 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const fetch = require('node-fetch');
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -8,21 +7,36 @@ const headers = {
 };
 
 exports.handler = async (event) => {
+  // 1. Handle Pre-flight request
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "Gemini API Key missing." }) };
-  }
-
   try {
-    const { history } = JSON.parse(event.body || '{}');
+    // 2. Check for the API Key
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("CRITICAL ERROR: GEMINI_API_KEY is missing in Netlify settings!");
+      return { 
+        statusCode: 500, 
+        headers, 
+        body: JSON.stringify({ error: "API Key is missing. Please check Netlify settings." }) 
+      };
+    }
+
+    // 3. Parse the message from your website
+    const body = JSON.parse(event.body || '{}');
+    const { history } = body;
+
+    if (!history || !Array.isArray(history)) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: "Invalid conversation history." }) };
+    }
+
+    // 4. Connect to Gemini
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const systemPrompt = "You are Sahay, a medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU. Be polite and helpful.";
+    const systemPrompt = "You are Sahay, an AI medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU. Be polite and helpful.";
 
     const chat = model.startChat({
       history: [
@@ -33,19 +47,25 @@ exports.handler = async (event) => {
     });
 
     const userMessage = history[history.length - 1].parts[0].text;
+    
+    // 5. Send to AI
     const result = await chat.sendMessage(userMessage);
     const response = await result.response;
+    const text = response.text();
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ reply: response.text() })
+      body: JSON.stringify({ reply: text })
     };
+
   } catch (error) {
+    // This will print the EXACT error in your Netlify logs
+    console.error("DETAILED ERROR LOG:", error);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "AI Error", details: error.message })
+      body: JSON.stringify({ error: "AI logic failed", details: error.message })
     };
   }
 };
