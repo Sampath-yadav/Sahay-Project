@@ -1,6 +1,5 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const fetch = require('node-fetch');
 
-// Standard headers for all responses
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -9,102 +8,58 @@ const headers = {
 };
 
 exports.handler = async (event) => {
-  // 1. Handle CORS Pre-flight (Important for browser security)
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
-  }
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    // 2. Strong Key Validation
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error("Deployment Error: GEMINI_API_KEY is not defined in Netlify.");
-      return { 
-        statusCode: 500, 
-        headers, 
-        body: JSON.stringify({ error: "Server configuration error: Key missing." }) 
-      };
-    }
+    if (!apiKey) throw new Error("GEMINI_API_KEY is missing in Netlify Settings.");
 
-    // 3. Dynamic Initialization
-    // This matches the ^0.21.0 or newer library in your package.json
-    const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // We use the 'gemini-1.5-flash' model which is fast and supports Telugu well
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash" 
-    });
-
-    // 4. Parse Request Body safely
     const body = JSON.parse(event.body || '{}');
     const { history } = body;
 
-    if (!history || !Array.isArray(history) || history.length === 0) {
-      return { 
-        statusCode: 400, 
-        headers, 
-        body: JSON.stringify({ error: "Conversation history is required." }) 
-      };
-    }
+    // 1. We manually target the STABLE v1 endpoint (No more v1beta 404!)
+    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-    // 5. Strong Persona (System Prompt)
-    const systemPrompt = `You are Sahay, a helpful AI medical assistant for Prudence Hospitals. 
-    ALWAYS SPEAK IN TELUGU. 
-    Keep your answers concise, empathetic, and medically professional.`;
+    const systemPrompt = "You are Sahay, a medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU.";
 
-    // 6. Dynamic Chat Session
-    // We start the chat by injecting the system prompt as the first instruction
-    const chat = model.startChat({
-      history: [
-        { role: "user", parts: [{ text: systemPrompt }] },
-        { role: "model", parts: [{ text: "అర్థమైంది. నేను ప్రుడెన్స్ హాస్పిటల్స్ అసిస్టెంట్‌గా మీకు తెలుగులో సహాయం చేస్తాను." }] },
-        // Add the previous conversation but exclude the very last user message
-        ...history.slice(0, -1) 
-      ]
+    // 2. Prepare the data exactly how Google wants it
+    const contents = [
+      { role: "user", parts: [{ text: systemPrompt }] },
+      { role: "model", parts: [{ text: "అర్థమైంది. నేను ప్రుడెన్స్ హాస్పిటల్స్ అసిస్టెంట్‌గా మీకు తెలుగులో సహాయం చేస్తాను." }] },
+      ...history.map(item => ({
+        role: item.role === 'model' ? 'model' : 'user',
+        parts: item.parts
+      }))
+    ];
+
+    // 3. Send the request directly
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents })
     });
 
-    // 7. Get User Message and Send
-    const lastUserMessage = history[history.length - 1].parts[0].text;
-    
-    // Using sendMessage makes the conversation feel stateful
-    const result = await chat.sendMessage(lastUserMessage);
-    const response = await result.response;
-    const aiText = response.text();
+    const data = await response.json();
 
-    // 8. Return Success
+    if (data.error) {
+      throw new Error(data.error.message);
+    }
+
+    // 4. Extract the text reply
+    const aiReply = data.candidates[0].content.parts[0].text;
+
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ reply: aiText })
+      body: JSON.stringify({ reply: aiReply })
     };
 
   } catch (error) {
-    // 9. Detailed Error Analysis (Helps you find the exact problem)
-    console.error("STRONG ERROR LOG:", {
-      message: error.message,
-      status: error.status,
-      type: error.constructor.name
-    });
-
-    // Handle the specific 404 "Not Found" error gracefully
-    if (error.message.includes('404') || error.message.includes('not found')) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          error: "Model Connection Error", 
-          details: "Google could not find the Gemini model. This usually happens if the library version and model name don't match. Please Clear Cache and Re-deploy."
-        })
-      };
-    }
-
+    console.error("ULTIMATE ERROR LOG:", error.message);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ 
-        error: "AI Brain Failure", 
-        message: error.message 
-      })
+      body: JSON.stringify({ error: "Direct Connection Failed", details: error.message })
     };
   }
 };
