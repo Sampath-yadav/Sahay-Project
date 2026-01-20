@@ -12,27 +12,33 @@ exports.handler = async (event) => {
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new Error("GEMINI_API_KEY is missing in Netlify Settings.");
+    if (!apiKey) throw new Error("GEMINI_API_KEY is missing.");
 
     const body = JSON.parse(event.body || '{}');
     const { history } = body;
 
-    // 1. We manually target the STABLE v1 endpoint (No more v1beta 404!)
-    const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    // 1. We use v1beta and the "-latest" suffix to ensure it finds the model
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
 
-    const systemPrompt = "You are Sahay, a medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU.";
+    const systemPrompt = "You are Sahay, a medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU. Be helpful and kind.";
 
-    // 2. Prepare the data exactly how Google wants it
+    // 2. Formatting the conversation properly for Google
     const contents = [
-      { role: "user", parts: [{ text: systemPrompt }] },
-      { role: "model", parts: [{ text: "అర్థమైంది. నేను ప్రుడెన్స్ హాస్పిటల్స్ అసిస్టెంట్‌గా మీకు తెలుగులో సహాయం చేస్తాను." }] },
+      {
+        role: "user",
+        parts: [{ text: systemPrompt }]
+      },
+      {
+        role: "model",
+        parts: [{ text: "అర్థమైంది. నేను సహాయ్ గా తెలుగులో మీకు సహాయం చేస్తాను." }]
+      },
       ...history.map(item => ({
         role: item.role === 'model' ? 'model' : 'user',
         parts: item.parts
       }))
     ];
 
-    // 3. Send the request directly
+    // 3. Make the call
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -41,11 +47,16 @@ exports.handler = async (event) => {
 
     const data = await response.json();
 
-    if (data.error) {
-      throw new Error(data.error.message);
+    // 4. Detailed error checking
+    if (!response.ok) {
+      console.error("Google API Error Response:", data);
+      throw new Error(data.error?.message || "Google API failed to respond.");
     }
 
-    // 4. Extract the text reply
+    if (!data.candidates || !data.candidates[0]) {
+      throw new Error("AI returned an empty response.");
+    }
+
     const aiReply = data.candidates[0].content.parts[0].text;
 
     return {
@@ -59,7 +70,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "Direct Connection Failed", details: error.message })
+      body: JSON.stringify({ error: "AI Connection Error", details: error.message })
     };
   }
 };
