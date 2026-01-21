@@ -1,4 +1,4 @@
-import { supabase } from './lib/supabaseClient';
+const fetch = require('node-fetch');
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -8,135 +8,201 @@ const headers = {
 };
 
 /**
- * WORKER FUNCTIONS (Internal)
- * These handle the actual database logic.
- */
-const workers = {
-  bookAppointment: async (args: { patientName: string, specialty: string, dateTime: string, phone: string }) => {
-    try {
-      // 1. Resolve Doctor ID from Specialty
-      const { data: doctorData, error: doctorError } = await supabase
-        .from('doctors')
-        .select('id, name')
-        .ilike('specialization', `%${args.specialty}%`)
-        .limit(1)
-        .single();
-
-      if (doctorError || !doctorData) {
-        return { success: false, msg: `I couldn't find a doctor available for ${args.specialty}.` };
-      }
-
-      // 2. Format Date/Time (Assuming AI sends "YYYY-MM-DD HH:mm")
-      const [date, ...timeParts] = args.dateTime.split(' ');
-      const time = timeParts.join(' ');
-
-      // 3. Insert into Supabase
-      const { data, error } = await supabase
-        .from('appointments')
-        .insert({
-          patient_name: args.patientName,
-          doctor_id: doctorData.id,
-          appointment_date: date,
-          appointment_time: time,
-          phone: args.phone,
-          status: 'confirmed'
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      return { 
-        success: true, 
-        msg: `Perfect! I've booked your appointment with Dr. ${doctorData.name} for ${args.dateTime}. ID: ${data.id}` 
-      };
-    } catch (err: any) {
-      return { success: false, msg: `Database error: ${err.message}` };
-    }
-  }
-};
-
-/**
- * TOOL DEFINITION
- * This tells Llama what data it needs to extract from the user.
+ * TOOL DEFINITIONS
+ * These tell the AI exactly what "capabilities" it has.
  */
 const tools = [
   {
     type: "function",
     function: {
-      name: "bookAppointment",
-      description: "Registers a new appointment in the hospital database.",
+      name: "getAvailableSlots",
+      description: "Step 4 of workflow. Gets available time slots. Call 1: Use doctorName and date. Call 2: Add timeOfDay ('morning'/'afternoon') based on user choice.",
       parameters: {
         type: "object",
         properties: {
-          patientName: { type: "string", description: "The patient's full name" },
-          specialty: { type: "string", description: "The medical department (e.g. Cardiology)" },
-          dateTime: { type: "string", description: "The date and time (e.g. 2025-05-20 10:00 AM)" },
-          phone: { type: "string", description: "The patient's contact phone number" }
+          doctorName: { type: "string" },
+          date: { type: "string", description: "Format: YYYY-MM-DD" },
+          timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening"], description: "Optional. Use only after user picks a period." }
         },
-        required: ["patientName", "specialty", "dateTime", "phone"]
+        required: ["doctorName", "date"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "getDoctorDetails",
+      description: "Step 2 of workflow. Finds doctors based on specialty or name.",
+      parameters: {
+        type: "object",
+        properties: {
+          specialty: { type: "string" },
+          doctorName: { type: "string" }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "bookAppointment",
+      description: "Step 6 of workflow. Finalizes the booking in the database.",
+      parameters: {
+        type: "object",
+        properties: {
+          doctorName: { type: "string" },
+          patientName: { type: "string" },
+          phone: { type: "string" },
+          date: { type: "string" },
+          time: { type: "string" }
+        },
+        required: ["doctorName", "patientName", "phone", "date", "time"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancelAppointment",
+      description: "Cancels an existing appointment.",
+      parameters: {
+        type: "object",
+        properties: {
+          doctorName: { type: "string" },
+          patientName: { type: "string" },
+          date: { type: "string" }
+        },
+        required: ["doctorName", "patientName", "date"]
       }
     }
   }
 ];
 
-export const handler = async (event: any) => {
+/**
+ * TOOL EXECUTOR
+ * Calls your other Netlify worker functions (external tool integration).
+ */
+async function executeTool(name, args, host) {
+  const url = `https://${host}/.netlify/functions/${name}`;
+  console.log(`Executing Tool: ${name} with args:`, args);
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args)
+  });
+
+  if (!response.ok) throw new Error(`Tool ${name} failed to respond.`);
+  return await response.json();
+}
+
+exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
     const apiKey = process.env.GROQ_API_KEY;
-    const { history } = JSON.parse(event.body || '{}');
-    const userMessage = history[history.length - 1].parts[0].text;
+    const body = JSON.parse(event.body || '{}');
+    const { history } = body;
+    const host = event.headers.host || 'sahayhealth.netlify.app';
+    const currentDate = new Date().toLocaleDateString('en-CA');
 
-    // 1. Boss (AI) reviews the request
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    // 1. CONTEXT AWARENESS: Map history to Groq Message Format
+    const messages = [
+      { 
+        role: "system", 
+        content: `You are Sahay, a professional English Medical Assistant for Prudence Hospitals.
+        
+        STRICT WORKFLOW:
+        1. Understand Need: Ask for symptoms/specialty.
+        2. Find Doctor: Call 'getDoctorDetails'.
+        3. Get Date: Ask preferred date.
+        4. Check Schedule (2-Step Drill):
+           - Call 'getAvailableSlots' (doctor, date) -> Present periods (Morning/Afternoon).
+           - Ask user preference.
+           - Call 'getAvailableSlots' (doctor, date, timeOfDay) -> Present specific times.
+        5. Gather Details: Name and Phone.
+        6. Book: Call 'bookAppointment'.
+        
+        RULES:
+        - Current Date: ${currentDate}.
+        - Be concise, professional, and empathetic.
+        - Never provide medical advice.`
+      },
+      ...history.map(item => ({
+        role: item.role === 'model' ? 'assistant' : 'user',
+        content: item.parts[0].text
+      }))
+    ];
+
+    // 2. ORCHESTRATION: Send request to Groq
+    let response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        messages: [
-          { 
-            role: "system", 
-            content: "You are Sahay. Use the bookAppointment tool ONLY when you have the Name, Specialty, Date/Time, and Phone. If any are missing, ask the user politely." 
-          },
-          { role: "user", content: userMessage }
-        ],
+        messages: messages,
         tools: tools,
         tool_choice: "auto"
       })
     });
 
-    const data = await response.json();
-    const aiMessage = data.choices[0].message;
+    let data = await response.json();
+    let aiMessage = data.choices[0].message;
 
-    // 2. Orchestration: If AI triggers a tool, run the internal Worker
+    // 3. MULTI-STEP REASONING: Handle Tool Calls if triggered
     if (aiMessage.tool_calls) {
-      const call = aiMessage.tool_calls[0];
-      const args = JSON.parse(call.function.arguments);
+      // Add AI's intent to message list
+      messages.push(aiMessage);
 
-      if (call.function.name === "bookAppointment") {
-        const result = await workers.bookAppointment(args);
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ reply: result.msg })
-        };
+      // Execute each tool call
+      for (const toolCall of aiMessage.tool_calls) {
+        const result = await executeTool(
+          toolCall.function.name, 
+          JSON.parse(toolCall.function.arguments),
+          host
+        );
+
+        // Feed the tool result back into the history
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          name: toolCall.function.name,
+          content: JSON.stringify(result)
+        });
       }
+
+      // Final pass: Get natural language reply based on tool results
+      const finalResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: messages
+        })
+      });
+
+      const finalData = await finalResponse.json();
+      aiMessage = finalData.choices[0].message;
     }
 
-    // 3. Simple Text Response (if no tool was triggered)
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({ reply: aiMessage.content })
     };
 
-  } catch (error: any) {
-    return { 
-      statusCode: 500, 
-      headers, 
-      body: JSON.stringify({ error: error.message }) 
+  } catch (error) {
+    console.error("ORCHESTRATOR_FATAL:", error.message);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: "System failed", details: error.message })
     };
   }
 };
