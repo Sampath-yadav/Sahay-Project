@@ -9,7 +9,7 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
     'Content-Type': 'application/json'
   };
 
-  // Handle CORS Pre-flight
+  // 1. Handle Browser Security Check
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
   }
@@ -17,10 +17,9 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
   try {
     const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) {
-      throw new Error("ELEVENLABS_API_KEY is missing in environment variables.");
+      throw new Error("ELEVENLABS_API_KEY is missing in Netlify environment variables.");
     }
 
-    // Safely parse the incoming text
     const body = JSON.parse(event.body || '{}');
     const { text } = body;
 
@@ -28,13 +27,13 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
       return { 
         statusCode: 400, 
         headers, 
-        body: JSON.stringify({ error: "No text provided for speech synthesis." }) 
+        body: JSON.stringify({ error: "No text provided." }) 
       };
     }
 
-    // ElevenLabs Configuration
-    // Voice ID: 21m00Tcm4lpxqxtnmHUC (Rachel)
-    const voiceId = "21m00Tcm4lpxqxtnmHUC";
+    // 2. ElevenLabs Configuration
+    // Your updated Voice ID: QeKcckTBICc3UuWL7ETc
+    const voiceId = "QeKcckTBICc3UuWL7ETc";
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
 
     const response = await fetch(url, {
@@ -45,10 +44,13 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
       },
       body: JSON.stringify({
         text: text,
+        // Using Multilingual v2 is the most important part for Telugu fluency
         model_id: "eleven_multilingual_v2",
         voice_settings: { 
-          stability: 0.5, 
-          similarity_boost: 0.5 
+          stability: 0.4,           // Lowered for more natural expression
+          similarity_boost: 0.8,    // Increased for better regional accent
+          style: 0.0,               // Standard style
+          use_speaker_boost: true   // Makes the voice clearer
         }
       })
     });
@@ -56,10 +58,10 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
     if (!response.ok) {
       const errorData = await response.json();
       console.error("ElevenLabs API Error:", errorData);
-      throw new Error(`ElevenLabs API failed with status ${response.status}`);
+      throw new Error(`ElevenLabs API failed: ${errorData.detail?.status || response.statusText}`);
     }
 
-    // Convert audio binary data to Base64 string for easy transport
+    // 3. Process the Audio Buffer
     const audioBuffer = await response.buffer();
     const base64Audio = audioBuffer.toString('base64');
 
