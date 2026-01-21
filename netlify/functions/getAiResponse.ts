@@ -9,7 +9,7 @@ const headers = {
 
 /**
  * TOOL DEFINITIONS
- * These tell the AI exactly what "capabilities" it has.
+ * These tell Groq exactly what "capabilities" Sahay has.
  */
 const tools = [
   {
@@ -22,7 +22,7 @@ const tools = [
         properties: {
           doctorName: { type: "string" },
           date: { type: "string", description: "Format: YYYY-MM-DD" },
-          timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening"], description: "Optional. Use only after user picks a period." }
+          timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening"] }
         },
         required: ["doctorName", "date"]
       }
@@ -46,7 +46,7 @@ const tools = [
     type: "function",
     function: {
       name: "bookAppointment",
-      description: "Step 6 of workflow. Finalizes the booking in the database.",
+      description: "Step 6 of workflow. Finalizes the booking in the database. Call only after patient name and phone are collected.",
       parameters: {
         type: "object",
         properties: {
@@ -59,41 +59,39 @@ const tools = [
         required: ["doctorName", "patientName", "phone", "date", "time"]
       }
     }
-  },
-  {
-    type: "function",
-    function: {
-      name: "cancelAppointment",
-      description: "Cancels an existing appointment.",
-      parameters: {
-        type: "object",
-        properties: {
-          doctorName: { type: "string" },
-          patientName: { type: "string" },
-          date: { type: "string" }
-        },
-        required: ["doctorName", "patientName", "date"]
-      }
-    }
   }
 ];
 
 /**
  * TOOL EXECUTOR
- * Calls your other Netlify worker functions (external tool integration).
+ * Robust tool caller that adapts to both local (HTTP) and production (HTTPS) environments.
  */
 async function executeTool(name, args, host) {
-  const url = `https://${host}/.netlify/functions/${name}`;
-  console.log(`Executing Tool: ${name} with args:`, args);
+  // Fix: Check if host is localhost to use http protocol
+  const protocol = host.includes('localhost') ? 'http' : 'https';
+  const url = `${protocol}://${host}/.netlify/functions/${name}`;
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args)
-  });
+  console.log(`Executing Tool: ${url} with args:`, args);
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args)
+    });
 
-  if (!response.ok) throw new Error(`Tool ${name} failed to respond.`);
-  return await response.json();
+    const result = await response.json();
+    
+    // If the tool returns a specific failure (like 409 conflict), we pass it back to the AI
+    if (!response.ok) {
+      return { error: true, message: result.message || `Tool ${name} failed.` };
+    }
+    
+    return result;
+  } catch (err) {
+    console.error(`Tool Execution Error (${name}):`, err.message);
+    return { error: true, message: "Connection to tool failed." };
+  }
 }
 
 exports.handler = async (event) => {
@@ -101,32 +99,36 @@ exports.handler = async (event) => {
 
   try {
     const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) throw new Error("GROQ_API_KEY is missing.");
+
     const body = JSON.parse(event.body || '{}');
     const { history } = body;
     const host = event.headers.host || 'sahayhealth.netlify.app';
+    
+    // Normalize current date for AI context
     const currentDate = new Date().toLocaleDateString('en-CA');
 
-    // 1. CONTEXT AWARENESS: Map history to Groq Message Format
+    // 1. CONTEXT AWARENESS: Build the prompt with strict medical workflow
     const messages = [
       { 
         role: "system", 
         content: `You are Sahay, a professional English Medical Assistant for Prudence Hospitals.
         
         STRICT WORKFLOW:
-        1. Understand Need: Ask for symptoms/specialty.
+        1. Understand Need: Ask for symptoms or specialty if unknown.
         2. Find Doctor: Call 'getDoctorDetails'.
-        3. Get Date: Ask preferred date.
-        4. Check Schedule (2-Step Drill):
-           - Call 'getAvailableSlots' (doctor, date) -> Present periods (Morning/Afternoon).
-           - Ask user preference.
-           - Call 'getAvailableSlots' (doctor, date, timeOfDay) -> Present specific times.
-        5. Gather Details: Name and Phone.
-        6. Book: Call 'bookAppointment'.
+        3. Get Date: Ask for a preferred date (Format: YYYY-MM-DD).
+        4. Check Schedule:
+           - Call 'getAvailableSlots' (doctorName, date) -> Present Morning/Afternoon periods.
+           - Once user picks a period, call 'getAvailableSlots' (doctorName, date, timeOfDay) -> Present specific 30-min times.
+        5. Patient Info: Ask for Full Name and Phone Number.
+        6. Book: Confirm all details clearly, then call 'bookAppointment'.
         
-        RULES:
+        CONSTRAINTS:
         - Current Date: ${currentDate}.
-        - Be concise, professional, and empathetic.
-        - Never provide medical advice.`
+        - Be concise and professional.
+        - If 'bookAppointment' returns a conflict error (slot taken), explain it empathetically and ask for another time.
+        - Never offer medical advice.`
       },
       ...history.map(item => ({
         role: item.role === 'model' ? 'assistant' : 'user',
@@ -134,7 +136,7 @@ exports.handler = async (event) => {
       }))
     ];
 
-    // 2. ORCHESTRATION: Send request to Groq
+    // 2. AI REASONING PASS 1
     let response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: 'POST',
       headers: {
@@ -150,14 +152,14 @@ exports.handler = async (event) => {
     });
 
     let data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+
     let aiMessage = data.choices[0].message;
 
-    // 3. MULTI-STEP REASONING: Handle Tool Calls if triggered
+    // 3. MULTI-STEP REASONING: Handle Tool Execution
     if (aiMessage.tool_calls) {
-      // Add AI's intent to message list
       messages.push(aiMessage);
 
-      // Execute each tool call
       for (const toolCall of aiMessage.tool_calls) {
         const result = await executeTool(
           toolCall.function.name, 
@@ -165,7 +167,6 @@ exports.handler = async (event) => {
           host
         );
 
-        // Feed the tool result back into the history
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
@@ -174,7 +175,7 @@ exports.handler = async (event) => {
         });
       }
 
-      // Final pass: Get natural language reply based on tool results
+      // 4. AI REASONING PASS 2: Generate natural reply based on tool results
       const finalResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: 'POST',
         headers: {
@@ -202,7 +203,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "System failed", details: error.message })
+      body: JSON.stringify({ error: "Service Unavailable", details: error.message })
     };
   }
 };

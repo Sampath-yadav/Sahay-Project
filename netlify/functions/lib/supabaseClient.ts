@@ -10,6 +10,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase Environment Variables');
 }
 
-// 3. Initialize the shared client
+// 3. Initialize the shared client with connection reuse
 // This single 'supabase' object will be used by all other functions
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// The client reuses connections across function invocations (Netlify warm starts)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false
+  }
+});

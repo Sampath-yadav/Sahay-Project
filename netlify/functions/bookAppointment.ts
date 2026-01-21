@@ -1,7 +1,10 @@
 import { Handler } from '@netlify/functions';
 import { supabase } from './lib/supabaseClient';
 
-// Standardized headers for CORS and JSON communication
+/**
+ * Standardized headers to handle CORS and JSON communication.
+ * Allows the React frontend and the AI Orchestrator to communicate securely.
+ */
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -20,9 +23,11 @@ export const handler: Handler = async (event) => {
   }
 
   try {
+    // Parse the payload sent by the getAiResponse orchestrator
     const { doctorName, patientName, date, time, phone } = JSON.parse(event.body || '{}');
     
-    // 2. Data Validation: Ensure all multi-step workflow details are present
+    // 2. Data Validation
+    // Validates that all variables from the multi-step workflow are present
     if (!doctorName || !patientName || !date || !time || !phone) {
       return { 
         statusCode: 400, 
@@ -31,7 +36,8 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // 3. Resolve Doctor ID: Map the AI-provided name to a UUID in Supabase
+    // 3. Resolve Doctor ID
+    // Maps the conversational doctor name to the unique database ID
     const { data: doctorData, error: doctorError } = await supabase
       .from('doctors')
       .select('id')
@@ -51,8 +57,8 @@ export const handler: Handler = async (event) => {
 
     /**
      * FEATURE INTEGRATION: ATOMIC SAFETY CHECK
-     * We query specifically for an existing 'confirmed' slot. 
-     * Using .maybeSingle() prevents errors if no row exists, returning null instead.
+     * Cross-references the requested slot against existing confirmed appointments.
+     * Use .maybeSingle() to return null instead of an error if the slot is free.
      */
     const { data: existing, error: checkError } = await supabase
       .from('appointments')
@@ -66,9 +72,9 @@ export const handler: Handler = async (event) => {
     if (checkError) throw checkError;
 
     /**
-     * FEATURE INTEGRATION: CONFLICT RESOLUTION (409) & EMPATHETIC MESSAGING
-     * If 'existing' is true, it means someone else finalized their booking 
-     * while the current user was still talking to the AI.
+     * FEATURE INTEGRATION: CONFLICT RESOLUTION (409)
+     * If 'existing' is true, it triggers a conflict status.
+     * The message is written empathetically for the AI to read back to the patient.
      */
     if (existing) {
       return { 
@@ -76,12 +82,16 @@ export const handler: Handler = async (event) => {
         headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `Sorry, the time slot ${time} with ${doctorName} was just booked by someone else. Please try another time.` 
+          message: `Sorry, the time slot ${time} on ${date} with ${doctorName} was just booked by someone else. Please try another time.` 
         }) 
       };
     }
 
-    // 4. Final Transaction: Insert the new appointment record
+    /**
+     * 4. FINAL TRANSACTION
+     * Inserts the appointment into the database with a 'confirmed' status.
+     * This will trigger updates on the Admin Dashboard in real-time if filtering for this date.
+     */
     const { error: appointmentError } = await supabase
       .from('appointments')
       .insert({ 
@@ -95,7 +105,7 @@ export const handler: Handler = async (event) => {
 
     if (appointmentError) throw appointmentError;
     
-    // Success response for the AI Orchestrator
+    // Success confirmation for the Orchestrator
     return { 
       statusCode: 200, 
       headers, 
@@ -112,7 +122,7 @@ export const handler: Handler = async (event) => {
       headers, 
       body: JSON.stringify({ 
         success: false, 
-        message: "A system error occurred while processing the booking." 
+        message: "A technical error occurred. Please try again shortly." 
       }) 
     };
   }
