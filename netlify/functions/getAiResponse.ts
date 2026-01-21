@@ -1,3 +1,6 @@
+// Import the workers
+const { workerFunctions } = require('./workerFunctions');
+
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -5,79 +8,76 @@ const headers = {
   'Content-Type': 'application/json'
 };
 
-exports.handler = async (event: any) => {
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers, body: '' };
+// Define the "Tools" menu for the AI
+const tools = [
+  {
+    type: "function",
+    function: {
+      name: "bookAppointment",
+      description: "Book a new hospital appointment",
+      parameters: {
+        type: "object",
+        properties: {
+          patientName: { type: "string" },
+          specialty: { type: "string" },
+          dateTime: { type: "string" }
+        },
+        required: ["patientName", "specialty", "dateTime"]
+      }
+    }
   }
+];
+
+exports.handler = async (event: { httpMethod: string; body: string }) => {
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) throw new Error("GROQ_API_KEY is missing.");
-
-    const body = JSON.parse(event.body || '{}');
-    const { history } = body;
-
-    if (!history || history.length === 0) {
-      throw new Error("No conversation history provided.");
-    }
-
-    // Get the latest user message
+    const { history } = JSON.parse(event.body || '{}');
     const userMessage = history[history.length - 1].parts[0].text;
 
-    const payload = {
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role: "system",
-          content: `You are Sahay, the Senior Hospital Coordinator for Prudence Hospitals. 
-          Your tone is professional, empathetic, and efficient. 
-          
-          CORE TASKS:
-          1. BOOKING: Collect Patient Name, Specialty (Cardiology, Orthopedics, etc.), and Date/Time.
-          2. RESCHEDULING: Ask for the existing appointment details and the new preferred time.
-          3. CANCELING: Confirm the appointment details before processing the cancellation.
-          
-          CONSTRAINTS:
-          - ALWAYS speak in clear, professional English.
-          - If information is missing, ask for it politely.
-          - Keep responses concise and clinical.`
-        },
-        { role: "user", content: userMessage }
-      ],
-      temperature: 0.6, // Lowered for more consistent/robust professional responses
-      max_tokens: 800
-    };
-
+    // 1. Ask the AI (The Boss) to analyze the request
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: "You are Sahay. Use tools to book appointments. Only call the tool if you have Name, Specialty, and Time." },
+          { role: "user", content: userMessage }
+        ],
+        tools: tools,
+        tool_choice: "auto"
+      })
     });
 
     const data = await response.json();
+    const message = data.choices[0].message;
 
-    if (!response.ok) {
-      throw new Error(data.error?.message || "Groq API error.");
+    // 2. Orchestration: Check if the Boss wants a Worker to act
+    if (message.tool_calls) {
+      const toolCall = message.tool_calls[0];
+      const args = JSON.parse(toolCall.function.arguments);
+      
+      // Delegate to the Worker
+      const result = await workerFunctions[toolCall.function.name](args);
+
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ reply: result.displayMessage, data: result.data })
+      };
     }
 
-    const aiReply = data.choices[0].message.content;
-
+    // 3. Fallback: Just return AI's conversational text
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ reply: aiReply })
+      body: JSON.stringify({ reply: message.content })
     };
 
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("COORDINATOR_ERROR:", errorMessage);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: "Coordinator connection failed", details: errorMessage })
-    };
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { statusCode: 500, headers, body: JSON.stringify({ error: errorMessage }) };
   }
 };
