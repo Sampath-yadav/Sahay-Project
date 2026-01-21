@@ -1,6 +1,5 @@
 [build]
-  # We leave 'command' empty so Netlify doesn't try to run Vite
-  command = ""
+  command = "npm run build"
   publish = "public"
   functions = "netlify/functions"
 

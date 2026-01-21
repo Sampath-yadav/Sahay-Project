@@ -1,5 +1,3 @@
-const fetch = require('node-fetch');
-
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -7,42 +5,49 @@ const headers = {
   'Content-Type': 'application/json'
 };
 
-exports.handler = async (event) => {
-  // Handle the browser's security check (CORS)
+exports.handler = async (event: any) => {
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
   }
 
   try {
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      throw new Error("GROQ_API_KEY is missing in Netlify settings.");
-    }
+    if (!apiKey) throw new Error("GROQ_API_KEY is missing.");
 
     const body = JSON.parse(event.body || '{}');
     const { history } = body;
 
-    // Convert the conversation into a format Groq understands
-    // We only take the last message for simplicity, or map the whole history
+    if (!history || history.length === 0) {
+      throw new Error("No conversation history provided.");
+    }
+
+    // Get the latest user message
     const userMessage = history[history.length - 1].parts[0].text;
 
     const payload = {
-      model: "llama-3.3-70b-versatile", // Fast and free-tier friendly model
+      model: "llama-3.3-70b-versatile",
       messages: [
         {
           role: "system",
-          content: "You are Sahay, an AI medical assistant for Prudence Hospitals. ALWAYS SPEAK IN TELUGU. Be polite, concise, and helpful."
+          content: `You are Sahay, the Senior Hospital Coordinator for Prudence Hospitals. 
+          Your tone is professional, empathetic, and efficient. 
+          
+          CORE TASKS:
+          1. BOOKING: Collect Patient Name, Specialty (Cardiology, Orthopedics, etc.), and Date/Time.
+          2. RESCHEDULING: Ask for the existing appointment details and the new preferred time.
+          3. CANCELING: Confirm the appointment details before processing the cancellation.
+          
+          CONSTRAINTS:
+          - ALWAYS speak in clear, professional English.
+          - If information is missing, ask for it politely.
+          - Keep responses concise and clinical.`
         },
-        {
-          role: "user",
-          content: userMessage
-        }
+        { role: "user", content: userMessage }
       ],
-      temperature: 0.7,
-      max_tokens: 1024
+      temperature: 0.6, // Lowered for more consistent/robust professional responses
+      max_tokens: 800
     };
 
-    // Call the Groq API directly
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: 'POST',
       headers: {
@@ -55,11 +60,9 @@ exports.handler = async (event) => {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("Groq API Error:", data);
-      throw new Error(data.error?.message || "Failed to get response from Groq.");
+      throw new Error(data.error?.message || "Groq API error.");
     }
 
-    // Extract the text reply from Groq's response structure
     const aiReply = data.choices[0].message.content;
 
     return {
@@ -69,14 +72,12 @@ exports.handler = async (event) => {
     };
 
   } catch (error) {
-    console.error("GROQ_BRAIN_ERROR:", error.message);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("COORDINATOR_ERROR:", errorMessage);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ 
-        error: "Brain connection failed", 
-        details: error.message 
-      })
+      body: JSON.stringify({ error: "Coordinator connection failed", details: errorMessage })
     };
   }
 };

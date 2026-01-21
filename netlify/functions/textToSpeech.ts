@@ -1,14 +1,14 @@
 import { Handler, HandlerEvent, HandlerResponse } from '@netlify/functions';
 
 /**
- * Optimized Sanitizer: 
- * Ensures the text is clean for ElevenLabs Multilingual v2.
- * This helps in maintaining a native Telugu flow.
+ * Clean Text for TTS:
+ * Removes unnecessary symbols to ensure a smooth English flow
+ * without robotic pauses.
  */
-const sanitizeForTeluguTTS = (text: string): string => {
+const cleanEnglishText = (text: string): string => {
   return text
-    .replace(/[#*`]/g, '')        // Remove markdown symbols
-    .replace(/(\d+)\s*-\s*(\d+)/g, '$1 నుండి $2') // Convert "10-11" to "10 నుండి 11"
+    .replace(/[#*`]/g, '') // Remove markdown formatting
+    .replace(/\s+/g, ' ')  // Normalize whitespace
     .trim();
 };
 
@@ -24,18 +24,18 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
 
   try {
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    if (!apiKey) throw new Error("ELEVENLABS_API_KEY missing.");
+    if (!apiKey) throw new Error("ELEVENLABS_API_KEY missing in environment variables.");
 
     const body = JSON.parse(event.body || '{}');
     let { text } = body;
 
-    if (!text) return { statusCode: 400, headers, body: JSON.stringify({ error: "No text." }) };
+    if (!text) return { statusCode: 400, headers, body: JSON.stringify({ error: "No text provided." }) };
 
-    // Optimize text for Telugu native flow
-    text = sanitizeForTeluguTTS(text);
+    // Prepare text for English synthesis
+    text = cleanEnglishText(text);
 
-    // Voice ID: QeKcckTBICc3UuWL7ETc
-    const voiceId = "QeKcckTBICc3UuWL7ETc";
+    // Voice ID: EXAVITQu4vr4xnSDxMaL (Sarah - Professional English)
+    const voiceId = "QeKcckTBICc3UuWL7Tc";
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
 
     const response = await fetch(url, {
@@ -46,21 +46,22 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
       },
       body: JSON.stringify({
         text: text,
-        model_id: "eleven_multilingual_v2", // Best for regional Indian languages
+        model_id: "eleven_turbo_v2_5", // Optimized for English (Fast & Accurate)
         voice_settings: { 
-          stability: 0.38,           // Perfect balance for "Human-like" variance
-          similarity_boost: 0.85,    // High boost to lock in the native Telugu accent
-          style: 0.1,                // Adds a slight professional cadence
-          use_speaker_boost: true    // Enhances clarity for mobile speakers
+          stability: 0.5,           // Balanced for professional consistency
+          similarity_boost: 0.75,    // High clarity for English pronunciation
+          style: 0.0,                // Neutral, professional tone
+          use_speaker_boost: true    // Enhances voice presence
         }
       })
     });
 
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(`ElevenLabs Error: ${errorData.detail?.status || response.statusText}`);
+      throw new Error(`ElevenLabs API Error: ${errorData.detail?.status || response.statusText}`);
     }
 
+    // Convert audio binary to Base64 for the frontend
     const audioBuffer = await response.arrayBuffer();
     const base64Audio = Buffer.from(audioBuffer).toString('base64');
 
@@ -71,11 +72,11 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
     };
 
   } catch (error: any) {
-    console.error("Optimized Voice Error:", error.message);
+    console.error("English Voice Service Error:", error.message);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: error.message })
+      body: JSON.stringify({ error: "Voice synthesis failed", details: error.message })
     };
   }
 };

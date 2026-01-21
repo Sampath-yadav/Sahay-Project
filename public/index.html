@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="te">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,9 +10,9 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
         body { 
-            font-family: 'Noto Sans Telugu', sans-serif; 
+            font-family: 'Inter', sans-serif; 
             background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
         }
         .dot { animation: wave 1.3s linear infinite; }
@@ -28,18 +28,16 @@
 
         function App() {
             const [history, setHistory] = useState([
-                { role: 'model', parts: [{ text: "నమస్కారం! నేను సహాయ్, మీ AI ఆరోగ్య సహాయకుడిని. నేను మీకు ఎలా సహాయపడగలను?" }] }
+                { role: 'model', parts: [{ text: "Hello! I am Sahay, your AI health assistant. How can I help you today?" }] }
             ]);
             const [status, setStatus] = useState('idle');
             const [inputText, setInputText] = useState('');
             const chatEndRef = useRef(null);
             const recognitionRef = useRef(null);
-            // Reference to handle audio playback
             const audioPlayerRef = useRef(new Audio());
 
             useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
 
-            // UPDATED: Using ElevenLabs via Netlify Function
             const playVoice = async (text) => {
                 try {
                     setStatus('speaking');
@@ -52,7 +50,6 @@
                     const data = await response.json();
                     
                     if (data.audioContent) {
-                        // Play the base64 audio returned by ElevenLabs
                         audioPlayerRef.current.src = `data:audio/mpeg;base64,${data.audioContent}`;
                         audioPlayerRef.current.play();
                         
@@ -78,12 +75,11 @@
                     });
                     
                     const data = await response.json();
-                    const aiReply = data.reply || "క్షమించండి, సర్వర్ నుండి సమాధానం పొందలేకపోయాను.";
+                    const aiReply = data.reply || "I apologize, I couldn't retrieve a response from the server.";
                     
                     const updatedHistory = [...currentHistory, { role: 'model', parts: [{ text: aiReply }] }];
                     setHistory(updatedHistory);
                     
-                    // Trigger ElevenLabs Voice
                     playVoice(aiReply);
                 } catch (error) {
                     console.error("AI Error:", error);
@@ -100,12 +96,12 @@
                 getAiReply(newHistory);
             };
 
-            // Speech-to-Text Setup
+            // Speech-to-Text Setup updated for English
             useEffect(() => {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (!SpeechRecognition) return;
                 const rec = new SpeechRecognition();
-                rec.lang = 'te-IN';
+                rec.lang = 'en-US'; // Changed from Telugu to English
                 rec.onstart = () => setStatus('listening');
                 rec.onend = () => { if(status === 'listening') setStatus('idle'); };
                 rec.onresult = (e) => {
@@ -175,7 +171,7 @@
                                     type="text" 
                                     value={inputText}
                                     onChange={(e) => setInputText(e.target.value)}
-                                    placeholder="మీ సందేశాన్ని టైప్ చేయండి..."
+                                    placeholder="Type your message here..."
                                     className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all"
                                     disabled={status !== 'idle'}
                                 />
