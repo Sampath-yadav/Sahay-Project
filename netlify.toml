@@ -5,3 +5,12 @@
 
 [dev]
   port = 8888
+
+# IMPORTANT: These are placeholders - must be configured in Netlify Dashboard
+# Go to: Site Settings → Environment Variables to add actual values
+[context.production.environment]
+  SUPABASE_URL = "https://zvfxwztbzykvyhrjrfn.supabase.co"
+  SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2Znh3enRienlrdnp5aHJqcmZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg3MTc2NTAsImV4cCI6MjA4NDI5MzY1MH0.K5LSiCO8F6ENhwy4O51ufrzuB6O51VUgO0H9V6bYNnA"
+  SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2Znh3enRienlrdnp5aHJqcmZuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2ODcxNzY1MCwiZXhwIjoyMDg0MjkzNjUwfQ.0PDoJt4pn4OaQyQf23B7kLF78KniQltTf6CO-kp71lM"
+  MISTRAL_API_KEY = "Gf7dHdtcUbpmXFtglNxPtd7ATOHHPNAd"
+  ELEVENLABS_API_KEY = "sk_d185c6855e5541d8be327f00a3a288b0f9cbd31765873165"
