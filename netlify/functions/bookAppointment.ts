@@ -1,10 +1,6 @@
 import { Handler } from '@netlify/functions';
 import { supabase } from './lib/supabaseClient';
 
-/**
- * Standardized headers to handle CORS and JSON communication.
- * Allows the React frontend and the AI Orchestrator to communicate securely.
- */
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
@@ -15,32 +11,28 @@ const headers = {
 export const handler: Handler = async (event) => {
   // 1. Handle CORS preflight requests
   if (event.httpMethod === 'OPTIONS') {
-    return { 
-      statusCode: 200, 
-      headers, 
-      body: JSON.stringify({ message: 'CORS preflight successful' }) 
-    };
+    return { statusCode: 200, headers, body: '' };
   }
 
   try {
-    // Parse the payload sent by the getAiResponse orchestrator
     const { doctorName, patientName, date, time, phone } = JSON.parse(event.body || '{}');
     
     // 2. Data Validation
-    // Validates that all variables from the multi-step workflow are present
     if (!doctorName || !patientName || !date || !time || !phone) {
       return { 
         statusCode: 400, 
         headers, 
-        body: JSON.stringify({ error: "Missing required appointment details." }) 
+        body: JSON.stringify({ 
+          success: false, 
+          message: "Missing details. Please provide doctor, name, date, time, and phone." 
+        }) 
       };
     }
 
-    // 3. Resolve Doctor ID
-    // Maps the conversational doctor name to the unique database ID
+    // 3. Resolve Doctor ID from Name
     const { data: doctorData, error: doctorError } = await supabase
       .from('doctors')
-      .select('id')
+      .select('id, name')
       .ilike('name', `%${doctorName}%`)
       .single();
 
@@ -50,16 +42,12 @@ export const handler: Handler = async (event) => {
         headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `Could not find a doctor named ${doctorName}.` 
+          message: `Doctor '${doctorName}' could not be identified in our system.` 
         }) 
       };
     }
 
-    /**
-     * FEATURE INTEGRATION: ATOMIC SAFETY CHECK
-     * Cross-references the requested slot against existing confirmed appointments.
-     * Use .maybeSingle() to return null instead of an error if the slot is free.
-     */
+    // 4. ATOMIC SAFETY CHECK (Race Condition Protection)
     const { data: existing, error: checkError } = await supabase
       .from('appointments')
       .select('id')
@@ -71,28 +59,21 @@ export const handler: Handler = async (event) => {
 
     if (checkError) throw checkError;
 
-    /**
-     * FEATURE INTEGRATION: CONFLICT RESOLUTION (409)
-     * If 'existing' is true, it triggers a conflict status.
-     * The message is written empathetically for the AI to read back to the patient.
-     */
+    // 5. CONFLICT RESOLUTION
     if (existing) {
       return { 
         statusCode: 409, 
         headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `Sorry, the time slot ${time} on ${date} with ${doctorName} was just booked by someone else. Please try another time.` 
+          message: `Conflict: The ${time} slot with ${doctorData.name} on ${date} was just taken.`,
+          instruction: "Inform the user about the conflict and ask for another time slot."
         }) 
       };
     }
 
-    /**
-     * 4. FINAL TRANSACTION
-     * Inserts the appointment into the database with a 'confirmed' status.
-     * This will trigger updates on the Admin Dashboard in real-time if filtering for this date.
-     */
-    const { error: appointmentError } = await supabase
+    // 6. FINAL TRANSACTION: Update Database
+    const { error: insertError } = await supabase
       .from('appointments')
       .insert({ 
         patient_name: patientName, 
@@ -103,26 +84,33 @@ export const handler: Handler = async (event) => {
         status: 'confirmed'
       });
 
-    if (appointmentError) throw appointmentError;
+    if (insertError) throw insertError;
     
-    // Success confirmation for the Orchestrator
+    // 7. STRUCTURED SUCCESS RESPONSE FOR MISTRAL
     return { 
       statusCode: 200, 
       headers, 
       body: JSON.stringify({ 
         success: true, 
-        message: 'Appointment booked successfully.' 
+        message: 'Appointment confirmed successfully!',
+        bookingSummary: {
+          doctor: doctorData.name,
+          patient: patientName,
+          date: date,
+          time: time
+        },
+        instruction: "Confirm the booking details to the user and end the call politely."
       }) 
     };
 
   } catch (error: any) {
-    console.error("CRITICAL_BOOKING_ERROR:", error.message);
+    console.error("MISTRAL_BOOKING_TOOL_ERROR:", error.message);
     return { 
       statusCode: 500, 
       headers, 
       body: JSON.stringify({ 
         success: false, 
-        message: "A technical error occurred. Please try again shortly." 
+        message: "A database error occurred while finalizing the booking." 
       }) 
     };
   }

@@ -1,4 +1,23 @@
-const fetch = require('node-fetch');
+import { Handler, HandlerEvent } from '@netlify/functions';
+
+// --- TYPE DEFINITIONS ---
+interface ChatPart {
+  text: string;
+}
+
+interface HistoryItem {
+  role: 'user' | 'model';
+  parts: ChatPart[];
+}
+
+interface ToolCall {
+  id: string;
+  type: string;
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -7,21 +26,17 @@ const headers = {
   'Content-Type': 'application/json'
 };
 
-/**
- * TOOL DEFINITIONS
- * These tell Groq exactly what "capabilities" Sahay has.
- */
 const tools = [
   {
     type: "function",
     function: {
       name: "getAvailableSlots",
-      description: "Step 4 of workflow. Gets available time slots. Call 1: Use doctorName and date. Call 2: Add timeOfDay ('morning'/'afternoon') based on user choice.",
+      description: "Find availability. REQUIRED: doctorName, date (YYYY-MM-DD).",
       parameters: {
         type: "object",
         properties: {
           doctorName: { type: "string" },
-          date: { type: "string", description: "Format: YYYY-MM-DD" },
+          date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
           timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening"] }
         },
         required: ["doctorName", "date"]
@@ -32,7 +47,7 @@ const tools = [
     type: "function",
     function: {
       name: "getDoctorDetails",
-      description: "Step 2 of workflow. Finds doctors based on specialty or name.",
+      description: "Search for doctors by name or specialty.",
       parameters: {
         type: "object",
         properties: {
@@ -46,128 +61,140 @@ const tools = [
     type: "function",
     function: {
       name: "bookAppointment",
-      description: "Step 6 of workflow. Finalizes the booking in the database. Call only after patient name and phone are collected.",
+      description: "Finalize booking. Call ONLY after user confirms summary is correct.",
       parameters: {
         type: "object",
         properties: {
           doctorName: { type: "string" },
           patientName: { type: "string" },
           phone: { type: "string" },
-          date: { type: "string" },
+          date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
           time: { type: "string" }
         },
         required: ["doctorName", "patientName", "phone", "date", "time"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancelAppointment",
+      description: "Cancel an existing appointment. REQUIRED: doctorName, patientName, date (YYYY-MM-DD).",
+      parameters: {
+        type: "object",
+        properties: {
+          doctorName: { type: "string" },
+          patientName: { type: "string" },
+          date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
+        },
+        required: ["doctorName", "patientName", "date"]
       }
     }
   }
 ];
 
 /**
- * TOOL EXECUTOR
- * Robust tool caller that adapts to both local (HTTP) and production (HTTPS) environments.
+ * Robust Tool Caller
+ * Handles protocol detection and URL sanitization
  */
-async function executeTool(name, args, host) {
-  // Fix: Check if host is localhost to use http protocol
-  const protocol = host.includes('localhost') ? 'http' : 'https';
-  const url = `${protocol}://${host}/.netlify/functions/${name}`;
-  
-  console.log(`Executing Tool: ${url} with args:`, args);
-  
+async function executeTool(name: string, args: object, host: string): Promise<any> {
   try {
+    const protocol = (host.includes('localhost') || host.includes('127.0.0.1')) ? 'http' : 'https';
+    const sanitizedHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const url = `${protocol}://${sanitizedHost}/.netlify/functions/${name}`;
+    
+    console.log(`[ORCHESTRATOR] Calling Tool: ${name} at ${url}`);
+    
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(args)
     });
 
-    const result = await response.json();
-    
-    // If the tool returns a specific failure (like 409 conflict), we pass it back to the AI
-    if (!response.ok) {
-      return { error: true, message: result.message || `Tool ${name} failed.` };
-    }
-    
-    return result;
-  } catch (err) {
-    console.error(`Tool Execution Error (${name}):`, err.message);
-    return { error: true, message: "Connection to tool failed." };
+    if (!response.ok) return { success: false, message: "Service is temporarily busy." };
+    return await response.json();
+  } catch (err: any) {
+    return { success: false, message: "Network connection issue." };
   }
 }
 
-exports.handler = async (event) => {
+export const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) throw new Error("GROQ_API_KEY is missing.");
+    const apiKey = process.env.MISTRAL_API_KEY;
+    if (!apiKey) throw new Error("MISTRAL_API_KEY is missing.");
 
     const body = JSON.parse(event.body || '{}');
-    const { history } = body;
-    const host = event.headers.host || 'sahayhealth.netlify.app';
+    const history: HistoryItem[] = body.history || [];
+    const host = event.headers['x-forwarded-host'] || event.headers.host || 'sahayhealth.netlify.app';
     
-    // Normalize current date for AI context
-    const currentDate = new Date().toLocaleDateString('en-CA');
+    // TEMPORAL LOGIC (Today and Tomorrow calculation)
+    const now = new Date();
+    const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(now.getDate() + 1);
+    const tomorrowStr = tomorrowDate.toLocaleDateString('en-CA');
+    const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
 
-    // 1. CONTEXT AWARENESS: Build the prompt with strict medical workflow
+    const sanitizedMessages = history
+      .filter(item => item.parts && item.parts[0]?.text?.trim() !== "")
+      .map(item => ({
+        role: item.role === 'model' ? 'assistant' : 'user',
+        content: item.parts[0].text
+      }));
+
     const messages = [
       { 
         role: "system", 
-        content: `You are Sahay, a professional English Medical Assistant for Prudence Hospitals.
-        
-        STRICT WORKFLOW:
-        1. Understand Need: Ask for symptoms or specialty if unknown.
-        2. Find Doctor: Call 'getDoctorDetails'.
-        3. Get Date: Ask for a preferred date (Format: YYYY-MM-DD).
-        4. Check Schedule:
-           - Call 'getAvailableSlots' (doctorName, date) -> Present Morning/Afternoon periods.
-           - Once user picks a period, call 'getAvailableSlots' (doctorName, date, timeOfDay) -> Present specific 30-min times.
-        5. Patient Info: Ask for Full Name and Phone Number.
-        6. Book: Confirm all details clearly, then call 'bookAppointment'.
-        
-        CONSTRAINTS:
-        - Current Date: ${currentDate}.
-        - Be concise and professional.
-        - If 'bookAppointment' returns a conflict error (slot taken), explain it empathetically and ask for another time.
-        - Never offer medical advice.`
+        content: `You are Sahay, the intelligent Health Assistant for Prudence Hospitals.
+
+CONTEXT:
+- Today is ${dayOfWeek}, ${todayStr}.
+- Tomorrow is ${tomorrowStr}.
+
+INTELLIGENCE RULES:
+1. FUZZY UNDERSTANDING: If user misspells symptoms ("headack" -> headache) or names ("adithya" -> Aditya), map them correctly.
+2. DATE NORMALIZATION: If user provides a date like "23/02/26" or "tomorrow", you MUST convert it to YYYY-MM-DD (e.g., 2026-02-23) when calling tools.
+3. PLAIN TEXT ONLY: Never use markdown, bolding (**), or headers. Use plain text only.
+4. CANCELLATION LOGIC:
+   - When a user asks to cancel, extract: Doctor Name, Patient Name, and Date.
+   - If multiple details are provided in one sentence (e.g., "cancel for sampath with aditya tomorrow"), extract all entities and call 'cancelAppointment' immediately.
+   - For cancellation, normalize the date to YYYY-MM-DD.
+
+BOOKING LOGIC:
+- Problem -> Suggest Specialty -> List Doctors -> Pick Period -> Pick Time -> Get Name/Phone -> Verify -> Book.`
       },
-      ...history.map(item => ({
-        role: item.role === 'model' ? 'assistant' : 'user',
-        content: item.parts[0].text
-      }))
+      ...sanitizedMessages
     ];
 
-    // 2. AI REASONING PASS 1
-    let response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    // PASS 1: Reasoning Pass
+    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: "mistral-small-latest",
         messages: messages,
         tools: tools,
-        tool_choice: "auto"
+        tool_choice: "auto",
+        temperature: 0.1
       })
     });
 
-    let data = await response.json();
-    if (data.error) throw new Error(data.error.message);
-
+    const data: any = await response.json();
     let aiMessage = data.choices[0].message;
 
-    // 3. MULTI-STEP REASONING: Handle Tool Execution
+    // PASS 2: Tool Execution
     if (aiMessage.tool_calls) {
-      messages.push(aiMessage);
-
-      for (const toolCall of aiMessage.tool_calls) {
+      const toolResults = [];
+      for (const toolCall of aiMessage.tool_calls as ToolCall[]) {
         const result = await executeTool(
           toolCall.function.name, 
           JSON.parse(toolCall.function.arguments),
           host
         );
-
-        messages.push({
+        
+        toolResults.push({
           role: "tool",
           tool_call_id: toolCall.id,
           name: toolCall.function.name,
@@ -175,35 +202,39 @@ exports.handler = async (event) => {
         });
       }
 
-      // 4. AI REASONING PASS 2: Generate natural reply based on tool results
-      const finalResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      const finalResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: messages
+          model: "mistral-small-latest",
+          messages: [...messages, aiMessage, ...toolResults],
+          temperature: 0.7 
         })
       });
 
-      const finalData = await finalResponse.json();
+      const finalData: any = await finalResponse.json();
       aiMessage = finalData.choices[0].message;
     }
+
+    // FINAL POST-PROCESSING: Strip all formatting
+    const cleanReply = (aiMessage.content || "")
+      .replace(/\*\*/g, "")      // Strip Bold
+      .replace(/__/g, "")      // Strip Italics
+      .replace(/#{1,6}\s?/g, "") // Strip Headers
+      .trim();
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ reply: aiMessage.content })
+      body: JSON.stringify({ reply: cleanReply })
     };
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("ORCHESTRATOR_FATAL:", error.message);
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "Service Unavailable", details: error.message })
+      body: JSON.stringify({ error: "System encountered a problem processing your request." })
     };
   }
 };
