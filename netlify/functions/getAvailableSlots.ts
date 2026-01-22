@@ -1,5 +1,5 @@
 import { Handler } from '@netlify/functions';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -138,7 +138,7 @@ export const handler: Handler = async (event) => {
       booked = null;
     }
 
-    const bookedTimes = (booked || []).map(b => b.appointment_time.substring(0, 5));
+    const bookedTimes = (booked || []).map((b: any) => b.appointment_time.substring(0, 5));
     const available = slots.filter(s => !bookedTimes.includes(s));
 
     // 6. CATEGORIZE FOR CONVERSATIONAL FLOW
