@@ -90,17 +90,38 @@ const tools = [
         required: ["doctorName", "patientName", "date"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "rescheduleAppointment",
+      description: "Move an existing appointment to a new date/time. REQUIRED: patientName, doctorName, oldDate, newDate, newTime.",
+      parameters: {
+        type: "object",
+        properties: {
+          patientName: { type: "string" },
+          doctorName: { type: "string" },
+          oldDate: { type: "string", description: "The original appointment date (YYYY-MM-DD)." },
+          newDate: { type: "string", description: "The desired new appointment date (YYYY-MM-DD)." },
+          newTime: { type: "string", description: "The desired new time (HH:MM)." }
+        },
+        required: ["patientName", "doctorName", "oldDate", "newDate", "newTime"]
+      }
+    }
   }
 ];
 
 /**
  * Robust Tool Caller
+ * Handles protocol detection and URL sanitization
  */
 async function executeTool(name: string, args: object, host: string): Promise<any> {
   try {
     const protocol = (host.includes('localhost') || host.includes('127.0.0.1')) ? 'http' : 'https';
     const sanitizedHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const url = `${protocol}://${sanitizedHost}/.netlify/functions/${name}`;
+    
+    console.log(`[ORCHESTRATOR] Calling Tool: ${name} at ${url}`);
     
     const response = await fetch(url, {
       method: 'POST',
@@ -120,15 +141,15 @@ export const handler: Handler = async (event: HandlerEvent) => {
 
   try {
     const apiKey = process.env.MISTRAL_API_KEY;
-    if (!apiKey) throw new Error("MISTRAL_API_KEY missing.");
+    if (!apiKey) throw new Error("MISTRAL_API_KEY is missing.");
 
     const body = JSON.parse(event.body || '{}');
     const history: HistoryItem[] = body.history || [];
     const host = event.headers['x-forwarded-host'] || event.headers.host || 'sahayhealth.netlify.app';
     
-    // DYNAMIC DATE INJECTION
+    // TEMPORAL LOGIC (Today and Tomorrow calculation)
     const now = new Date();
-    const todayStr = now.toLocaleDateString('en-CA'); 
+    const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
     const tomorrowDate = new Date();
     tomorrowDate.setDate(now.getDate() + 1);
     const tomorrowStr = tomorrowDate.toLocaleDateString('en-CA');
@@ -151,23 +172,26 @@ CONTEXT:
 - Tomorrow is ${tomorrowStr}.
 
 ANTI-HALLUCINATION RULES:
-1. NEVER guess or invent doctor names (e.g., Dr. Smith, Dr. Johnson). 
-2. DATA-FIRST: You MUST call 'getDoctorDetails' before suggesting a doctor. Only use names provided by the tool.
-3. If a tool returns no results, tell the user honestly that no match was found in our directory.
+1. NEVER guess or invent doctor names. Call 'getDoctorDetails' to verify.
+2. DATA-FIRST: Always call a tool before making factual claims about schedules or availability.
 
 INTELLIGENCE RULES:
-1. FUZZY UNDERSTANDING: Understand intent behind typos (e.g., "headack" -> headache).
-2. DATE LOGIC: "tomorrow" = ${tomorrowStr}, "today" = ${todayStr}.
-3. NO MARKDOWN: Never use asterisks (**), bolding, or headers. Use plain text only.
-4. SYMPTOM TEMPLATE: If a user states a problem, respond: "I'm sorry you're not feeling well. We have a [Specialty] available. Would you like to book an appointment?"
+1. FUZZY UNDERSTANDING: Map intent behind typos (e.g., "headack" -> Neurologist).
+2. DATE NORMALIZATION: Convert "tomorrow", "today", or "23/02/26" to YYYY-MM-DD for tool calls.
+3. NO MARKDOWN: Plain text only. No asterisks (**).
+4. RESCHEDULING LOGIC: 
+   - When user asks to reschedule, identify the existing appointment (Patient, Doctor, Old Date).
+   - Check 'getAvailableSlots' for the NEW date they desire.
+   - Once a new slot is chosen, call 'rescheduleAppointment' with all 5 required fields.
+5. SYMPTOM TRIAGE: "I'm sorry you're not feeling well. We have a [Specialty] available. Would you like to book an appointment?"
 
 STRICT FLOW:
-- Identify Symptom -> Call getDoctorDetails -> User picks Real Doctor -> Check Slots -> Collect Info -> Verify -> Book.`
+- Identify Symptom -> Call getDoctorDetails -> Pick Doctor -> Check Slots -> Collect Info -> Verify -> Book/Reschedule.`
       },
       ...sanitizedMessages
     ];
 
-    // PASS 1: Reasoning & Logic
+    // PASS 1: Reasoning Pass
     const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -183,11 +207,16 @@ STRICT FLOW:
     const data: any = await response.json();
     let aiMessage = data.choices[0].message;
 
-    // PASS 2: Tool Handling & Narrative
+    // PASS 2: Tool Execution
     if (aiMessage.tool_calls) {
       const toolResults = [];
       for (const toolCall of aiMessage.tool_calls as ToolCall[]) {
-        const result = await executeTool(toolCall.function.name, JSON.parse(toolCall.function.arguments), host);
+        const result = await executeTool(
+          toolCall.function.name, 
+          JSON.parse(toolCall.function.arguments),
+          host
+        );
+        
         toolResults.push({
           role: "tool",
           tool_call_id: toolCall.id,
@@ -210,11 +239,11 @@ STRICT FLOW:
       aiMessage = finalData.choices[0].message;
     }
 
-    // FINAL CLEANUP: Remove any accidental formatting
+    // FINAL POST-PROCESSING: Strip all formatting
     const cleanReply = (aiMessage.content || "")
-      .replace(/\*\*/g, "")
-      .replace(/__/g, "")
-      .replace(/#{1,6}\s?/g, "")
+      .replace(/\*\*/g, "")      
+      .replace(/__/g, "")      
+      .replace(/#{1,6}\s?/g, "") 
       .trim();
 
     return {
@@ -228,7 +257,7 @@ STRICT FLOW:
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "System encountered an error." })
+      body: JSON.stringify({ error: "System encountered a problem processing your request." })
     };
   }
 };
