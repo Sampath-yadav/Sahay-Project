@@ -54,11 +54,15 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
     }
 
     // 3. Data Transformation (In-Memory Deduplication)
-    // - .map extracts just the specialty names
+    /**
+     * FIX: Added explicit type '{ specialty: string }' to the 'doctor' parameter 
+     * to resolve TS7006: Parameter 'doctor' implicitly has an 'any' type.
+     */
+    const rawSpecialties = data.map((doctor: { specialty: string }) => doctor.specialty);
+    
     // - new Set() removes duplicates (e.g., 5 Cardiologists -> 1 "Cardiology")
     // - .sort() provides a consistent order for the AI to present to the user
-    const rawSpecialties = data.map(doctor => doctor.specialty);
-    const uniqueSpecialties = [...new Set(rawSpecialties)].filter(Boolean).sort();
+    const uniqueSpecialties = [...new Set(rawSpecialties)].filter((s): s is string => !!s).sort();
 
     // 4. AI-Friendly Response
     // We return a clear JSON object that the AI Orchestrator can easily parse.

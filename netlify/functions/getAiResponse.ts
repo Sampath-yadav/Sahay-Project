@@ -1,14 +1,19 @@
 import { Handler, HandlerEvent } from '@netlify/functions';
 
-// --- TYPE DEFINITIONS ---
-interface ChatPart {
-  text: string;
-}
+// --- CONSTANTS & CONFIGURATION ---
+const MISTRAL_MODEL = "mistral-small-latest";
+const DEFAULT_HOST = 'sahayhealth.netlify.app';
 
-interface HistoryItem {
-  role: 'user' | 'model';
-  parts: ChatPart[];
-}
+const HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Content-Type': 'application/json'
+};
+
+// --- TYPE DEFINITIONS ---
+interface ChatPart { text: string; }
+interface HistoryItem { role: 'user' | 'model'; parts: ChatPart[]; }
 
 interface ToolCall {
   id: string;
@@ -19,13 +24,7 @@ interface ToolCall {
   };
 }
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json'
-};
-
+// --- TOOL DEFINITIONS ---
 const tools = [
   {
     type: "function",
@@ -111,9 +110,10 @@ const tools = [
   }
 ];
 
+// --- UTILITY FUNCTIONS ---
+
 /**
- * Robust Tool Caller
- * Handles protocol detection and URL sanitization
+ * Executes a tool by calling the corresponding Netlify function.
  */
 async function executeTool(name: string, args: object, host: string): Promise<any> {
   try {
@@ -121,7 +121,7 @@ async function executeTool(name: string, args: object, host: string): Promise<an
     const sanitizedHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const url = `${protocol}://${sanitizedHost}/.netlify/functions/${name}`;
     
-    console.log(`[ORCHESTRATOR] Calling Tool: ${name} at ${url}`);
+    console.log(`[SAHAY-TOOL] Executing: ${name} | URL: ${url}`);
     
     const response = await fetch(url, {
       method: 'POST',
@@ -129,25 +129,32 @@ async function executeTool(name: string, args: object, host: string): Promise<an
       body: JSON.stringify(args)
     });
 
-    if (!response.ok) return { success: false, message: "Service is temporarily busy." };
+    if (!response.ok) {
+      console.error(`[SAHAY-TOOL] Error: ${name} returned status ${response.status}`);
+      return { success: false, message: "The specific tool is temporarily unavailable." };
+    }
+    
     return await response.json();
   } catch (err: any) {
-    return { success: false, message: "Network connection issue." };
+    console.error(`[SAHAY-TOOL] Network/Fetch Error: ${err.message}`);
+    return { success: false, message: "Network connection issue reaching the tool." };
   }
 }
 
+// --- MAIN HANDLER ---
+
 export const handler: Handler = async (event: HandlerEvent) => {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: HEADERS, body: '' };
 
   try {
     const apiKey = process.env.MISTRAL_API_KEY;
-    if (!apiKey) throw new Error("MISTRAL_API_KEY is missing.");
+    if (!apiKey) throw new Error("MISTRAL_API_KEY is missing in environment variables.");
 
     const body = JSON.parse(event.body || '{}');
     const history: HistoryItem[] = body.history || [];
-    const host = event.headers['x-forwarded-host'] || event.headers.host || 'sahayhealth.netlify.app';
+    const host = event.headers['x-forwarded-host'] || event.headers.host || DEFAULT_HOST;
     
-    // TEMPORAL LOGIC (Today and Tomorrow calculation)
+    // 1. Generate Temporal Context
     const now = new Date();
     const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
     const tomorrowDate = new Date();
@@ -155,6 +162,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
     const tomorrowStr = tomorrowDate.toLocaleDateString('en-CA');
     const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
 
+    // 2. Prepare Conversation History
     const sanitizedMessages = history
       .filter(item => item.parts && item.parts[0]?.text?.trim() !== "")
       .map(item => ({
@@ -162,6 +170,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
         content: item.parts[0].text
       }));
 
+    // 3. Construct System Prompt
     const messages = [
       { 
         role: "system", 
@@ -176,40 +185,51 @@ ANTI-HALLUCINATION RULES:
 2. DATA-FIRST: Always call a tool before making factual claims about schedules or availability.
 
 INTELLIGENCE RULES:
-1. FUZZY UNDERSTANDING: Map intent behind typos (e.g., "headack" -> Neurologist).
+1. FUZZY UNDERSTANDING: Map intent behind typos (e.g., "headack" -> headache).
 2. DATE NORMALIZATION: Convert "tomorrow", "today", or "23/02/26" to YYYY-MM-DD for tool calls.
-3. NO MARKDOWN: Plain text only. No asterisks (**).
-4. RESCHEDULING LOGIC: 
-   - When user asks to reschedule, identify the existing appointment (Patient, Doctor, Old Date).
-   - Check 'getAvailableSlots' for the NEW date they desire.
-   - Once a new slot is chosen, call 'rescheduleAppointment' with all 5 required fields.
-5. SYMPTOM TRIAGE: "I'm sorry you're not feeling well. We have a [Specialty] available. Would you like to book an appointment?"
+3. NO MARKDOWN: Plain text only. No asterisks (**), no bold, no headers.
 
-STRICT FLOW:
-- Identify Symptom -> Call getDoctorDetails -> Pick Doctor -> Check Slots -> Collect Info -> Verify -> Book/Reschedule.`
+STRICT RESCHEDULE WORKFLOW (STEP-BY-STEP):
+1. TURN 1: If the user says "reschedule", ask for: 1. Doctor's name, 2. Patient's name, and 3. Original (old) date.
+2. TURN 2: After receiving those 3, ask: "What is the new date you would like to reschedule to?"
+3. TURN 3: Once you have the new date, call 'getAvailableSlots' to show available times for that doctor/date.
+4. TURN 4: Once the user picks a time, call 'rescheduleAppointment' with (Patient, Doctor, Old Date, New Date, New Time).
+5. TURN 5: Confirm success clearly.
+
+BOOKING LOGIC:
+- Problem -> Suggest Specialty -> List Doctors -> Pick Period -> Pick Time -> Get Info -> Verify -> Book.
+
+SYMPTOM TRIAGE:
+- "I'm sorry you're not feeling well. We have a [Specialty] available. Would you like to book an appointment?"`
       },
       ...sanitizedMessages
     ];
 
-    // PASS 1: Reasoning Pass
-    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    // 4. PASS 1: Mistral reasoning and tool selection
+    const firstResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: { 
+        'Authorization': `Bearer ${apiKey}`, 
+        'Content-Type': 'application/json' 
+      },
       body: JSON.stringify({
-        model: "mistral-small-latest",
+        model: MISTRAL_MODEL,
         messages: messages,
         tools: tools,
         tool_choice: "auto",
-        temperature: 0.1
+        temperature: 0.1 // Low temperature for high precision in tool calling
       })
     });
 
-    const data: any = await response.json();
-    let aiMessage = data.choices[0].message;
+    const firstData: any = await firstResponse.json();
+    if (firstData.error) throw new Error(`Mistral Pass 1 Error: ${firstData.error.message}`);
+    
+    let aiMessage = firstData.choices[0].message;
 
-    // PASS 2: Tool Execution
-    if (aiMessage.tool_calls) {
+    // 5. Tool execution phase
+    if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
       const toolResults = [];
+      
       for (const toolCall of aiMessage.tool_calls as ToolCall[]) {
         const result = await executeTool(
           toolCall.function.name, 
@@ -225,39 +245,47 @@ STRICT FLOW:
         });
       }
 
+      // 6. PASS 2: Final response with tool results
       const finalResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: { 
+          'Authorization': `Bearer ${apiKey}`, 
+          'Content-Type': 'application/json' 
+        },
         body: JSON.stringify({
-          model: "mistral-small-latest",
+          model: MISTRAL_MODEL,
           messages: [...messages, aiMessage, ...toolResults],
-          temperature: 0.7 
+          temperature: 0.7 // Slightly higher for more natural speech
         })
       });
 
       const finalData: any = await finalResponse.json();
+      if (finalData.error) throw new Error(`Mistral Pass 2 Error: ${finalData.error.message}`);
       aiMessage = finalData.choices[0].message;
     }
 
-    // FINAL POST-PROCESSING: Strip all formatting
+    // 7. Cleanup and Output
     const cleanReply = (aiMessage.content || "")
-      .replace(/\*\*/g, "")      
-      .replace(/__/g, "")      
-      .replace(/#{1,6}\s?/g, "") 
+      .replace(/\*\*/g, "")      // Strip Bold
+      .replace(/__/g, "")      // Strip Italics
+      .replace(/#{1,6}\s?/g, "") // Strip Headers
       .trim();
 
     return {
       statusCode: 200,
-      headers,
+      headers: HEADERS,
       body: JSON.stringify({ reply: cleanReply })
     };
 
   } catch (error: any) {
-    console.error("ORCHESTRATOR_FATAL:", error.message);
+    console.error("[SAHAY-CRITICAL]:", error.message);
     return {
       statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: "System encountered a problem processing your request." })
+      headers: HEADERS,
+      body: JSON.stringify({ 
+        error: "System Interrupted", 
+        message: "I encountered a problem processing that request. Please try again." 
+      })
     };
   }
 };
