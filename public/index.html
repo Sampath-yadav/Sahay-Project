@@ -19,6 +19,14 @@
         .dot:nth-child(2) { animation-delay: -1.1s; }
         .dot:nth-child(3) { animation-delay: -0.9s; }
         @keyframes wave { 0%, 60%, 100% { transform: initial; } 30% { transform: translateY(-5px); } }
+        
+        /* Pulse effect for listening mode */
+        .mic-active { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
     </style>
 </head>
 <body>
@@ -30,11 +38,13 @@
             const [history, setHistory] = useState([
                 { role: 'model', parts: [{ text: "Hello! I am Sahay, your AI health assistant. How can I help you today?" }] }
             ]);
-            const [status, setStatus] = useState('idle');
+            const [status, setStatus] = useState('idle'); // idle, listening, thinking, speaking
             const [inputText, setInputText] = useState('');
+            
             const chatEndRef = useRef(null);
             const recognitionRef = useRef(null);
             const audioPlayerRef = useRef(new Audio());
+            const timeoutRef = useRef(null);
 
             useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
 
@@ -48,15 +58,11 @@
                     });
 
                     const data = await response.json();
-                    
                     if (data.audioContent) {
                         audioPlayerRef.current.src = `data:audio/mpeg;base64,${data.audioContent}`;
                         audioPlayerRef.current.play();
-                        
                         audioPlayerRef.current.onended = () => setStatus('idle');
-                        audioPlayerRef.current.onerror = () => setStatus('idle');
                     } else {
-                        console.error("No audio content received");
                         setStatus('idle');
                     }
                 } catch (error) {
@@ -75,16 +81,77 @@
                     });
                     
                     const data = await response.json();
-                    const aiReply = data.reply || "I apologize, I couldn't retrieve a response from the server.";
+                    const aiReply = data.reply || "I apologize, I couldn't retrieve a response.";
                     
                     const updatedHistory = [...currentHistory, { role: 'model', parts: [{ text: aiReply }] }];
                     setHistory(updatedHistory);
-                    
                     playVoice(aiReply);
                 } catch (error) {
                     console.error("AI Error:", error);
                     setStatus('idle');
                 }
+            };
+
+            // Enhanced Microphone Logic
+            const startMic = () => {
+                // 1. Cancel any active audio or existing recognition
+                audioPlayerRef.current.pause();
+                audioPlayerRef.current.currentTime = 0;
+                if (recognitionRef.current) recognitionRef.current.stop();
+                clearTimeout(timeoutRef.current);
+
+                // 2. Initialize Speech Recognition
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognition) {
+                    setHistory(prev => [...prev, { role: 'model', parts: [{ text: "Voice recognition is not supported in this browser." }] }]);
+                    return;
+                }
+
+                const rec = new SpeechRecognition();
+                rec.lang = 'en-US';
+                rec.continuous = false; // Automatically stops after silence (roughly 600-800ms)
+                rec.interimResults = false;
+
+                rec.onstart = () => {
+                    setStatus('listening');
+                    // 3. Set 3-second timeout if no audio is detected at all
+                    timeoutRef.current = setTimeout(() => {
+                        rec.stop();
+                        if (status === 'listening') {
+                            setStatus('idle');
+                            setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn’t catch that, please repeat." }] }]);
+                        }
+                    }, 3500);
+                };
+
+                rec.onspeechstart = () => {
+                    clearTimeout(timeoutRef.current); // Detected voice, cancel the initial timeout
+                };
+
+                rec.onresult = (e) => {
+                    const text = e.results[0][0].transcript;
+                    if (text.trim()) {
+                        const newHistory = [...history, { role: 'user', parts: [{ text }] }];
+                        setHistory(newHistory);
+                        getAiReply(newHistory);
+                    }
+                };
+
+                rec.onerror = (event) => {
+                    console.error("Speech Error:", event.error);
+                    if (event.error === 'no-speech') {
+                        setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn’t catch that, please repeat." }] }]);
+                    }
+                    setStatus('idle');
+                };
+
+                rec.onend = () => {
+                    // Ensure state clears if not already processing AI response
+                    if (status === 'listening') setStatus('idle');
+                };
+
+                recognitionRef.current = rec;
+                rec.start();
             };
 
             const handleTextSubmit = (e) => {
@@ -95,23 +162,6 @@
                 setInputText('');
                 getAiReply(newHistory);
             };
-
-            // Speech-to-Text Setup updated for English
-            useEffect(() => {
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                if (!SpeechRecognition) return;
-                const rec = new SpeechRecognition();
-                rec.lang = 'en-US'; // Changed from Telugu to English
-                rec.onstart = () => setStatus('listening');
-                rec.onend = () => { if(status === 'listening') setStatus('idle'); };
-                rec.onresult = (e) => {
-                    const text = e.results[0][0].transcript;
-                    const newHistory = [...history, { role: 'user', parts: [{ text }] }];
-                    setHistory(newHistory);
-                    getAiReply(newHistory);
-                };
-                recognitionRef.current = rec;
-            }, [history, status]);
 
             return (
                 <div className="flex items-center justify-center min-h-screen p-2 md:p-6">
@@ -139,12 +189,13 @@
                                     </div>
                                 </div>
                             ))}
-                            {(status === 'thinking' || status === 'speaking') && (
+                            {(status === 'thinking' || status === 'speaking' || status === 'listening') && (
                                 <div className="flex justify-start">
                                     <div className="bg-white px-5 py-4 rounded-2xl rounded-tl-none border border-slate-100 shadow-sm flex items-center space-x-1">
-                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : 'bg-blue-400'} rounded-full dot`}></div>
-                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : 'bg-blue-400'} rounded-full dot`}></div>
-                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : 'bg-blue-400'} rounded-full dot`}></div>
+                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : status === 'listening' ? 'bg-red-400' : 'bg-blue-400'} rounded-full dot`}></div>
+                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : status === 'listening' ? 'bg-red-400' : 'bg-blue-400'} rounded-full dot`}></div>
+                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : status === 'listening' ? 'bg-red-400' : 'bg-blue-400'} rounded-full dot`}></div>
+                                        {status === 'listening' && <span className="text-[10px] text-slate-400 ml-2 uppercase font-bold tracking-tighter">Listening...</span>}
                                     </div>
                                 </div>
                             )}
@@ -156,22 +207,22 @@
                             <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
                                 <button 
                                     type="button" 
-                                    onClick={() => recognitionRef.current?.start()}
+                                    onClick={startMic}
                                     className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
                                         status === 'listening' 
-                                        ? 'bg-red-500 text-white animate-bounce' 
+                                        ? 'bg-red-500 text-white mic-active' 
                                         : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                                     }`}
-                                    disabled={status !== 'idle'}
+                                    disabled={status === 'thinking'}
                                 >
-                                    <i className="fas fa-microphone"></i>
+                                    <i className={`fas ${status === 'listening' ? 'fa-stop' : 'fa-microphone'}`}></i>
                                 </button>
 
                                 <input
                                     type="text" 
                                     value={inputText}
                                     onChange={(e) => setInputText(e.target.value)}
-                                    placeholder="Type your message here..."
+                                    placeholder={status === 'listening' ? "Listening to your voice..." : "Type your message here..."}
                                     className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all"
                                     disabled={status !== 'idle'}
                                 />

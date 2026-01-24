@@ -1,5 +1,5 @@
-import { Handler } from '@netlify/functions';
-import { createClient } from '@supabase/supabase-js';
+import { Handler, HandlerEvent, HandlerResponse } from '@netlify/functions';
+import { supabase } from './lib/supabaseClient';
 
 const headers = {
   'Access-Control-Allow-Origin': '*',
@@ -9,139 +9,120 @@ const headers = {
 };
 
 /**
- * RETRY CONFIGURATION
- * Exponential backoff: 100ms, 200ms, 400ms (3 total attempts)
+ * SMART DATE PARSER
+ * Ensures that if the AI sends "tomorrow" or "24", the tool resolves it correctly.
  */
-const isTransientError = (error: any): boolean => {
-  const msg = error?.message?.toLowerCase() || '';
-  const code = error?.code || '';
+const smartDateParser = (dateInput: string): string | null => {
+  if (!dateInput) return null;
+  const input = dateInput.trim().toLowerCase();
+  const now = new Date();
   
-  return (
-    msg.includes('enotfound') ||
-    msg.includes('econnrefused') ||
-    msg.includes('timeout') ||
-    msg.includes('network') ||
-    code === 'ENOTFOUND' ||
-    code === 'ECONNREFUSED' ||
-    code === 'ETIMEDOUT'
-  );
+  if (input === 'tomorrow') {
+    const tomorrow = new Date();
+    tomorrow.setDate(now.getDate() + 1);
+    return tomorrow.toLocaleDateString('en-CA');
+  }
+  if (input === 'today') return now.toLocaleDateString('en-CA');
+
+  if (/^\d{1,2}$/.test(input)) {
+    const date = new Date(now.getFullYear(), now.getMonth(), parseInt(input));
+    return date.toLocaleDateString('en-CA');
+  }
+  
+  if (input.includes('/')) {
+    const parts = input.split('/');
+    if (parts.length === 3) {
+      let year = parts[2];
+      if (year.length === 2) year = `20${year}`;
+      return `${year}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+    }
+  }
+  return /^\d{4}-\d{2}-\d{2}$/.test(input) ? input : null;
 };
 
+/**
+ * RETRY LOGIC FOR DATABASE STABILITY
+ */
 const queryWithRetry = async (query: any, maxAttempts = 3) => {
   const delays = [100, 200, 400];
-  
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return await query();
+      const result = await query();
+      if (result.error) throw result.error;
+      return result;
     } catch (error: any) {
-      if (attempt === maxAttempts - 1 || !isTransientError(error)) {
-        throw error;
-      }
-      
-      const delayMs = delays[attempt];
-      console.log(`[RETRY] Attempt ${attempt + 1}/${maxAttempts} failed. Retrying in ${delayMs}ms...`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      if (attempt === maxAttempts - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, delays[attempt]));
     }
   }
 };
 
-export const handler: Handler = async (event) => {
+export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
   try {
-    // 1. SANITIZED CONFIGURATION
-    const rawUrl = process.env.SUPABASE_URL || '';
-    const supabaseUrl = rawUrl.trim().replace(/\/$/, ""); 
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
-
-    if (!supabaseUrl.startsWith('https')) {
-      throw new Error("Invalid database configuration.");
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    // 2. INPUT VALIDATION
     const { doctorName, date, timeOfDay } = JSON.parse(event.body || '{}');
 
-    if (!doctorName || !date) {
+    // 1. INPUT VALIDATION & DATE NORMALIZATION
+    const resolvedDate = smartDateParser(date);
+    if (!doctorName || !resolvedDate) {
       return { 
-        statusCode: 400, 
-        headers, 
-        body: JSON.stringify({ success: false, message: "Doctor name and date are required." }) 
+        statusCode: 200, headers, 
+        body: JSON.stringify({ success: false, message: "Doctor name and a valid date are required." }) 
       };
     }
 
-    // 3. FETCH DOCTOR'S SPECIFIC WORKING HOURS (with retry)
-    let doctor;
-    let docError;
-    
-    try {
-      const result = await queryWithRetry(() =>
-        supabase
-          .from('doctors')
-          .select('id, name, working_hours_start, working_hours_end')
-          .ilike('name', `%${doctorName.replace(/Dr\./gi, '').trim()}%`)
-          .single()
-      );
-      
-      doctor = result.data;
-      docError = result.error;
-    } catch (error: any) {
-      docError = error;
-    }
+    // 2. SMART DOCTOR LOOKUP (Resolves Issue A & B)
+    // We split the name and take the first relevant keyword to avoid "Mahesh Sampath" confusion
+    const cleanDocName = doctorName.split(' ')[0].replace(/Dr\./gi, '').trim();
+    // Gap-tolerant pattern: %M%a%h%e%s%h%
+    const searchPattern = `%${cleanDocName.split('').join('%')}%`;
 
-    if (docError || !doctor) {
+    const { data: doctors } = await queryWithRetry(() =>
+      supabase
+        .from('doctors')
+        .select('id, name, working_hours_start, working_hours_end')
+        .ilike('name', searchPattern)
+        .limit(1) // Avoids .single() crash (404)
+    );
+
+    if (!doctors || doctors.length === 0) {
       return { 
-        statusCode: 404, 
-        headers, 
+        statusCode: 200, headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `Could not find schedule for ${doctorName}.`,
+          message: `I couldn't find a doctor in our records matching '${doctorName}'.`,
           error_type: "DOCTOR_NOT_FOUND"
         }) 
       };
     }
+    const doctor = doctors[0];
 
-    // 4. DYNAMIC SLOT GENERATION (30-minute intervals)
+    // 3. SLOT GENERATION
     const slots: string[] = [];
-    const [startH, startM] = doctor.working_hours_start.split(':').map(Number);
-    const [endH, endM] = doctor.working_hours_end.split(':').map(Number);
-    
-    let currentH = startH;
-    let currentM = startM;
+    const [startH] = doctor.working_hours_start.split(':').map(Number);
+    const [endH] = doctor.working_hours_end.split(':').map(Number);
 
-    while (currentH < endH || (currentH === endH && currentM < endM)) {
-      const timeString = `${String(currentH).padStart(2, '0')}:${String(currentM).padStart(2, '0')}`;
-      slots.push(timeString);
-      
-      currentM += 30;
-      if (currentM >= 60) {
-        currentH++;
-        currentM = 0;
-      }
+    for (let h = startH; h < endH; h++) {
+      slots.push(`${String(h).padStart(2, '0')}:00`, `${String(h).padStart(2, '0')}:30`);
     }
 
-    // 5. FILTER OUT BOOKED APPOINTMENTS (with retry)
-    let booked;
-    try {
-      const result = await queryWithRetry(() =>
-        supabase
-          .from('appointments')
-          .select('appointment_time')
-          .eq('doctor_id', doctor.id)
-          .eq('appointment_date', date)
-          .eq('status', 'confirmed')
-      );
-      booked = result.data;
-    } catch (error: any) {
-      console.error('[SLOT_QUERY_ERROR]:', error.message);
-      booked = null;
-    }
+    // 4. FETCH BOOKED APPOINTMENTS
+    const { data: booked } = await queryWithRetry(() =>
+      supabase
+        .from('appointments')
+        .select('appointment_time')
+        .match({ 
+          doctor_id: doctor.id, 
+          appointment_date: resolvedDate, 
+          status: 'confirmed' 
+        })
+    );
 
     const bookedTimes = (booked || []).map((b: any) => b.appointment_time.substring(0, 5));
     const available = slots.filter(s => !bookedTimes.includes(s));
 
-    // 6. CATEGORIZE FOR CONVERSATIONAL FLOW
+    // 5. PERIOD CATEGORIZATION
     const morning = available.filter(t => parseInt(t.split(':')[0]) < 12);
     const afternoon = available.filter(t => {
       const h = parseInt(t.split(':')[0]);
@@ -149,68 +130,49 @@ export const handler: Handler = async (event) => {
     });
     const evening = available.filter(t => parseInt(t.split(':')[0]) >= 17);
 
-    // 7. RESPOND BASED ON AI REQUEST MODE
+    // 6. CONVERSATIONAL RESPONSE
     if (!timeOfDay) {
-      // MODE: Summary (Morning/Afternoon/Evening)
       const summary = [];
       if (morning.length > 0) summary.push({ period: 'morning', count: morning.length });
       if (afternoon.length > 0) summary.push({ period: 'afternoon', count: afternoon.length });
       if (evening.length > 0) summary.push({ period: 'evening', count: evening.length });
 
       return {
-        statusCode: 200,
-        headers,
+        statusCode: 200, headers,
         body: JSON.stringify({
           success: true,
           doctorName: doctor.name,
-          date,
+          date: resolvedDate,
           periods: summary,
           instruction: summary.length > 0 
-            ? "Tell the user which periods (morning/afternoon/evening) have slots available and ask which they prefer."
-            : "No slots available today. Suggest checking tomorrow."
+            ? "Tell the user which periods have slots and ask for their preference." 
+            : "No slots available. Suggest checking another date."
         })
       };
     } else {
-      // MODE: Specific Time Slots
       const target = timeOfDay.toLowerCase();
       const finalSlots = target === 'morning' ? morning : target === 'afternoon' ? afternoon : evening;
 
       return {
-        statusCode: 200,
-        headers,
+        statusCode: 200, headers,
         body: JSON.stringify({
           success: true,
           doctorName: doctor.name,
-          date,
+          date: resolvedDate,
           period: target,
           slots: finalSlots,
-          instruction: `List these ${target} slots for the user and ask them to pick one.`
+          instruction: `List the available ${target} times and ask the user to pick one.`
         })
       };
     }
 
   } catch (error: any) {
-    console.error("[SLOT_TOOL_ERROR]:", error.message);
-    
-    // Determine appropriate HTTP status based on error type
-    let statusCode = 500;
-    let errorType = "UNKNOWN_ERROR";
-    
-    if (isTransientError(error)) {
-      statusCode = 503; // Service Unavailable
-      errorType = "DATABASE_TEMPORARILY_UNAVAILABLE";
-    } else if (error.message.includes('timeout')) {
-      statusCode = 504; // Gateway Timeout
-      errorType = "REQUEST_TIMEOUT";
-    }
-    
+    console.error("[SMART_SLOTS_ERROR]:", error.message);
     return { 
-      statusCode,
-      headers, 
+      statusCode: 200, headers, 
       body: JSON.stringify({ 
         success: false, 
-        message: "I encountered a minor glitch checking the schedule. Let me try that again.",
-        error_type: errorType
+        message: "I'm having trouble retrieving the schedule. Please try again." 
       }) 
     };
   }

@@ -62,7 +62,6 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
     const { patientName, doctorName, oldDate, newDate, newTime } = body;
 
     // 1. RESOLVE DOCTOR FIRST (The Primary Key Strategy)
-    // We clean the name to avoid "Mahesh Sampath" confusion
     const cleanDocName = doctorName.split(' ')[0].replace(/Dr\./gi, ''); 
     const { data: doctors } = await supabase
       .from('doctors')
@@ -87,7 +86,6 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
     }
 
     // 3. VERIFICATION PHASE (Fetch existing row)
-    // Before updating, we make sure the appointment actually exists for this Doctor ID + Patient
     const { data: existingAppt, error: findError } = await supabase
       .from('appointments')
       .select('id, patient_name')
@@ -104,12 +102,12 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
         statusCode: 200, headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `I couldn't find a confirmed appointment for ${patientName} with Dr. ${doctor.name} on ${resolvedOldDate}.` 
+          message: `I couldn't find a confirmed appointment for ${patientName} on ${resolvedOldDate}.` 
         }) 
       };
     }
 
-    // 4. CONFLICT CHECK (Optional but recommended)
+    // 4. CONFLICT CHECK
     if (resolvedNewDate && newTime) {
       const { data: conflict } = await supabase
         .from('appointments')
@@ -126,7 +124,6 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
         return { statusCode: 200, headers, body: JSON.stringify({ success: false, message: "That new slot is already booked." }) };
       }
     } else {
-      // If we don't have newDate/Time yet, it means the AI is just verifying.
       return { 
         statusCode: 200, headers, 
         body: JSON.stringify({ 
@@ -137,8 +134,7 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
       };
     }
 
-    // 5. ATOMIC UPDATE (Replace Old Date with New Date)
-    // No new row is inserted. Status stays 'confirmed'.
+    // 5. ATOMIC UPDATE
     const { data: updated, error: updateError } = await supabase
       .from('appointments')
       .update({ 
@@ -146,10 +142,21 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
         appointment_time: newTime,
         updated_at: new Date().toISOString()
       })
-      .eq('id', existingAppt.id) // Target specific primary key found in Step 3
+      .eq('id', existingAppt.id)
       .select();
 
     if (updateError) throw updateError;
+
+    // FIX (TS6133): Use the 'updated' variable to verify row impact and satisfy the compiler
+    if (!updated || updated.length === 0) {
+      return { 
+        statusCode: 200, headers, 
+        body: JSON.stringify({ 
+          success: false, 
+          message: "The update failed to apply. Please try again." 
+        }) 
+      };
+    }
 
     return { 
       statusCode: 200, headers, 

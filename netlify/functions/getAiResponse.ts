@@ -35,7 +35,7 @@ const tools = [
         type: "object",
         properties: {
           doctorName: { type: "string" },
-          date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+          date: { type: "string" },
           timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening"] }
         },
         required: ["doctorName", "date"]
@@ -59,69 +59,49 @@ const tools = [
   {
     type: "function",
     function: {
+      name: "rescheduleAppointment",
+      description: "Step 1: VERIFY (Patient, Doctor, Old Date). Step 2: EXECUTE (Patient, Doctor, Old Date, New Date, New Time).",
+      parameters: {
+        type: "object",
+        properties: {
+          patientName: { type: "string" },
+          doctorName: { type: "string" },
+          oldDate: { type: "string" },
+          newDate: { type: "string" },
+          newTime: { type: "string" }
+        },
+        required: ["patientName", "doctorName", "oldDate"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "bookAppointment",
-      description: "Finalize booking. Call ONLY after user confirms summary is correct.",
+      description: "Finalize a NEW appointment booking.",
       parameters: {
         type: "object",
         properties: {
           doctorName: { type: "string" },
           patientName: { type: "string" },
           phone: { type: "string" },
-          date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+          date: { type: "string" },
           time: { type: "string" }
         },
         required: ["doctorName", "patientName", "phone", "date", "time"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "cancelAppointment",
-      description: "Cancel an existing appointment. REQUIRED: doctorName, patientName, date (YYYY-MM-DD).",
-      parameters: {
-        type: "object",
-        properties: {
-          doctorName: { type: "string" },
-          patientName: { type: "string" },
-          date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
-        },
-        required: ["doctorName", "patientName", "date"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "rescheduleAppointment",
-      description: "Move an existing appointment to a new date/time. REQUIRED: patientName, doctorName, oldDate, newDate, newTime.",
-      parameters: {
-        type: "object",
-        properties: {
-          patientName: { type: "string" },
-          doctorName: { type: "string" },
-          oldDate: { type: "string", description: "The original appointment date (YYYY-MM-DD)." },
-          newDate: { type: "string", description: "The desired new appointment date (YYYY-MM-DD)." },
-          newTime: { type: "string", description: "The desired new time (HH:MM)." }
-        },
-        required: ["patientName", "doctorName", "oldDate", "newDate", "newTime"]
       }
     }
   }
 ];
 
 // --- UTILITY FUNCTIONS ---
-
-/**
- * Executes a tool by calling the corresponding Netlify function.
- */
 async function executeTool(name: string, args: object, host: string): Promise<any> {
   try {
     const protocol = (host.includes('localhost') || host.includes('127.0.0.1')) ? 'http' : 'https';
     const sanitizedHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
     const url = `${protocol}://${sanitizedHost}/.netlify/functions/${name}`;
     
-    console.log(`[SAHAY-TOOL] Executing: ${name} | URL: ${url}`);
+    console.log(`[SAHAY-TOOL] Executing: ${name} with args:`, JSON.stringify(args));
     
     const response = await fetch(url, {
       method: 'POST',
@@ -129,40 +109,29 @@ async function executeTool(name: string, args: object, host: string): Promise<an
       body: JSON.stringify(args)
     });
 
-    if (!response.ok) {
-      console.error(`[SAHAY-TOOL] Error: ${name} returned status ${response.status}`);
-      return { success: false, message: "The specific tool is temporarily unavailable." };
-    }
-    
+    if (!response.ok) return { success: false, message: "Service temporarily busy." };
     return await response.json();
   } catch (err: any) {
-    console.error(`[SAHAY-TOOL] Network/Fetch Error: ${err.message}`);
-    return { success: false, message: "Network connection issue reaching the tool." };
+    return { success: false, message: "Network connection issue." };
   }
 }
 
 // --- MAIN HANDLER ---
-
 export const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: HEADERS, body: '' };
 
   try {
     const apiKey = process.env.MISTRAL_API_KEY;
-    if (!apiKey) throw new Error("MISTRAL_API_KEY is missing in environment variables.");
+    if (!apiKey) throw new Error("MISTRAL_API_KEY missing.");
 
     const body = JSON.parse(event.body || '{}');
     const history: HistoryItem[] = body.history || [];
     const host = event.headers['x-forwarded-host'] || event.headers.host || DEFAULT_HOST;
     
-    // 1. Generate Temporal Context
     const now = new Date();
-    const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
-    const tomorrowDate = new Date();
-    tomorrowDate.setDate(now.getDate() + 1);
-    const tomorrowStr = tomorrowDate.toLocaleDateString('en-CA');
+    const todayStr = now.toLocaleDateString('en-CA');
     const dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });
 
-    // 2. Prepare Conversation History
     const sanitizedMessages = history
       .filter(item => item.parts && item.parts[0]?.text?.trim() !== "")
       .map(item => ({
@@ -170,66 +139,52 @@ export const handler: Handler = async (event: HandlerEvent) => {
         content: item.parts[0].text
       }));
 
-    // 3. Construct System Prompt
     const messages = [
       { 
         role: "system", 
         content: `You are Sahay, the intelligent Health Assistant for Prudence Hospitals.
+Today is ${dayOfWeek}, ${todayStr}.
 
-CONTEXT:
-- Today is ${dayOfWeek}, ${todayStr}.
-- Tomorrow is ${tomorrowStr}.
+INTENT RECOVERY & RESILIENCE:
+1. If the user uses words like "reset", "reset you late", "move", or "change date", interpret this as "RESCHEDULE". 
+2. Never apologize for missing capabilities regarding appointments. You HAVE the 'rescheduleAppointment' tool and it is fully functional.
 
-ANTI-HALLUCINATION RULES:
-1. NEVER guess or invent doctor names. Call 'getDoctorDetails' to verify.
-2. DATA-FIRST: Always call a tool before making factual claims about schedules or availability.
+ENTITY EXTRACTION RULE:
+- Combined strings like "Mahesh Sampath 23" mean: Doctor="Mahesh", Patient="Sampath", Date="23".
 
-INTELLIGENCE RULES:
-1. FUZZY UNDERSTANDING: Map intent behind typos (e.g., "headack" -> headache).
-2. DATE NORMALIZATION: Convert "tomorrow", "today", or "23/02/26" to YYYY-MM-DD for tool calls.
-3. NO MARKDOWN: Plain text only. No asterisks (**), no bold, no headers.
+STRICT RESCHEDULE WORKFLOW (DO NOT DEVIATE):
+- Step 1: User says "reschedule". Ask for Doctor, Patient, and Old Date.
+- Step 2: Receive details. Call 'getDoctorDetails' THEN call 'rescheduleAppointment' (verification mode) with those 3 fields.
+- Step 3: If verification successful, ask: "I found your record. What is the new date you would like to move to?"
+- Step 4: Receive New Date. Call 'getAvailableSlots'.
+- Step 5: User picks time. Call 'rescheduleAppointment' with all 5 fields to finalize.
 
-STRICT RESCHEDULE WORKFLOW (STEP-BY-STEP):
-1. TURN 1: If the user says "reschedule", ask for: 1. Doctor's name, 2. Patient's name, and 3. Original (old) date.
-2. TURN 2: After receiving those 3, ask: "What is the new date you would like to reschedule to?"
-3. TURN 3: Once you have the new date, call 'getAvailableSlots' to show available times for that doctor/date.
-4. TURN 4: Once the user picks a time, call 'rescheduleAppointment' with (Patient, Doctor, Old Date, New Date, New Time).
-5. TURN 5: Confirm success clearly.
-
-BOOKING LOGIC:
-- Problem -> Suggest Specialty -> List Doctors -> Pick Period -> Pick Time -> Get Info -> Verify -> Book.
-
-SYMPTOM TRIAGE:
-- "I'm sorry you're not feeling well. We have a [Specialty] available. Would you like to book an appointment?"`
+RULES:
+- NO ASTERISKS (**). NO MARKDOWN.
+- Be conversational but professional. Focus on the medical context.`
       },
       ...sanitizedMessages
     ];
 
-    // 4. PASS 1: Mistral reasoning and tool selection
+    // PASS 1: Logic Pass
     const firstResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: 'POST',
-      headers: { 
-        'Authorization': `Bearer ${apiKey}`, 
-        'Content-Type': 'application/json' 
-      },
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: MISTRAL_MODEL,
         messages: messages,
         tools: tools,
         tool_choice: "auto",
-        temperature: 0.1 // Low temperature for high precision in tool calling
+        temperature: 0.1
       })
     });
 
     const firstData: any = await firstResponse.json();
-    if (firstData.error) throw new Error(`Mistral Pass 1 Error: ${firstData.error.message}`);
-    
     let aiMessage = firstData.choices[0].message;
 
-    // 5. Tool execution phase
+    // PASS 2: Tool Execution
     if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
       const toolResults = [];
-      
       for (const toolCall of aiMessage.tool_calls as ToolCall[]) {
         const result = await executeTool(
           toolCall.function.name, 
@@ -245,30 +200,24 @@ SYMPTOM TRIAGE:
         });
       }
 
-      // 6. PASS 2: Final response with tool results
       const finalResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
         method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${apiKey}`, 
-          'Content-Type': 'application/json' 
-        },
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: MISTRAL_MODEL,
           messages: [...messages, aiMessage, ...toolResults],
-          temperature: 0.7 // Slightly higher for more natural speech
+          temperature: 0.7 
         })
       });
 
       const finalData: any = await finalResponse.json();
-      if (finalData.error) throw new Error(`Mistral Pass 2 Error: ${finalData.error.message}`);
       aiMessage = finalData.choices[0].message;
     }
 
-    // 7. Cleanup and Output
     const cleanReply = (aiMessage.content || "")
-      .replace(/\*\*/g, "")      // Strip Bold
-      .replace(/__/g, "")      // Strip Italics
-      .replace(/#{1,6}\s?/g, "") // Strip Headers
+      .replace(/\*\*/g, "")
+      .replace(/__/g, "")
+      .replace(/#{1,6}\s?/g, "")
       .trim();
 
     return {
@@ -282,10 +231,7 @@ SYMPTOM TRIAGE:
     return {
       statusCode: 500,
       headers: HEADERS,
-      body: JSON.stringify({ 
-        error: "System Interrupted", 
-        message: "I encountered a problem processing that request. Please try again." 
-      })
+      body: JSON.stringify({ error: "Workflow interrupted. Please try again." })
     };
   }
 };
