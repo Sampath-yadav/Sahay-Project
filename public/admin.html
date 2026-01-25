@@ -131,8 +131,8 @@
                             <div class="text-xs text-slate-400 font-medium">${appt.phone || 'No phone'}</div>
                         </td>
                         <td class="px-6 py-4">
-                            <div class="font-bold text-slate-700">Dr. ${appt.doctors.name}</div>
-                            <div class="text-xs font-bold text-blue-500 uppercase tracking-tighter">${appt.doctors.specialty}</div>
+                            <div class="font-bold text-slate-700">Dr. ${appt.doctors?.name || 'Unknown'}</div>
+                            <div class="text-xs font-bold text-blue-500 uppercase tracking-tighter">${appt.doctors?.specialty || 'General'}</div>
                         </td>
                         <td class="px-6 py-4 text-sm">
                             <div class="font-bold text-slate-600">${formattedDate}</div>
@@ -159,14 +159,17 @@
             const specialty = specialtyFilter.value;
             const status = statusFilter.value;
             let filtered = [...allAppointments];
-            if (specialty) filtered = filtered.filter(a => a.doctors.specialty === specialty);
+            if (specialty) filtered = filtered.filter(a => a.doctors?.specialty === specialty);
             if (status) filtered = filtered.filter(a => a.status === status);
             renderTable(filtered);
         }
 
         async function fetchData(dateString) {
-            loadingDiv.classList.remove('hidden');
-            tableContainer.classList.add('hidden');
+            // Only show the full-page loader if no data is currently visible
+            if (allAppointments.length === 0) {
+                loadingDiv.classList.remove('hidden');
+                tableContainer.classList.add('hidden');
+            }
             errorDiv.classList.add('hidden');
             try {
                 const { data, error } = await supabaseClient
@@ -185,6 +188,26 @@
                 loadingDiv.classList.add('hidden');
                 errorDiv.classList.remove('hidden');
             }
+        }
+
+        // Real-time Update Listener
+        function setupRealtime() {
+            supabaseClient
+                .channel('schema-db-changes')
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'appointments'
+                    },
+                    (payload) => {
+                        console.log('Database Change Detected:', payload);
+                        // Silently refresh the current date view
+                        fetchData(dateFilter.value);
+                    }
+                )
+                .subscribe();
         }
         
         async function populateSpecialties() {
@@ -210,6 +233,7 @@
             dateFilter.value = getTodayDateString();
             populateSpecialties();
             fetchData(getTodayDateString());
+            setupRealtime(); // Start listening for live changes
         }
 
         async function start() {
@@ -220,7 +244,7 @@
                 initDashboard();
             } catch (error) {
                 loadingDiv.classList.add('hidden');
-                errorMessageSpan.textContent = "Could not connect to database.";
+                errorMessageSpan.textContent = "Could not connect to clinical database.";
                 errorDiv.classList.remove('hidden');
             }
         }

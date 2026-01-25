@@ -25,13 +25,11 @@ const smartDateParser = (dateInput: string): string | null => {
 
   if (input === 'today') return now.toLocaleDateString('en-CA');
 
-  // Handle single day number (e.g., "23")
   if (/^\d{1,2}$/.test(input)) {
     const date = new Date(now.getFullYear(), now.getMonth(), parseInt(input));
     return date.toLocaleDateString('en-CA');
   }
 
-  // Handle DD/MM/YY or DD/MM/YYYY
   if (input.includes('/')) {
     const parts = input.split('/');
     if (parts.length === 3) {
@@ -42,7 +40,6 @@ const smartDateParser = (dateInput: string): string | null => {
       const iso = `${year}-${month}-${day}`;
       return iso;
     }
-    // Handle DD/MM
     if (parts.length === 2) {
       const date = new Date(now.getFullYear(), parseInt(parts[1]) - 1, parseInt(parts[0]));
       return date.toLocaleDateString('en-CA');
@@ -61,7 +58,6 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
     const body = JSON.parse(event.body || '{}');
     const { patientName, doctorName, oldDate, newDate, newTime } = body;
 
-    // 1. RESOLVE DOCTOR FIRST (The Primary Key Strategy)
     const cleanDocName = doctorName.split(' ')[0].replace(/Dr\./gi, ''); 
     const { data: doctors } = await supabase
       .from('doctors')
@@ -77,18 +73,19 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
     }
     const doctor = doctors[0];
 
-    // 2. NORMALIZE DATES
     const resolvedOldDate = smartDateParser(oldDate);
     const resolvedNewDate = smartDateParser(newDate);
 
     if (!resolvedOldDate) {
-      return { statusCode: 200, headers, body: JSON.stringify({ success: false, message: `I couldn't verify the original date: ${oldDate}` }) };
+      return { 
+        statusCode: 200, headers, 
+        body: JSON.stringify({ success: false, message: `I couldn't verify the original date: ${oldDate}` }) 
+      };
     }
 
-    // 3. VERIFICATION PHASE (Fetch existing row)
     const { data: existingAppt, error: findError } = await supabase
       .from('appointments')
-      .select('id, patient_name')
+      .select('id, patient_name, appointment_time')
       .match({ 
         doctor_id: doctor.id, 
         appointment_date: resolvedOldDate,
@@ -102,13 +99,12 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
         statusCode: 200, headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `I couldn't find a confirmed appointment for ${patientName} on ${resolvedOldDate}.` 
+          message: `I couldn't find a confirmed appointment for ${patientName} with Dr. ${doctor.name} on ${resolvedOldDate}.` 
         }) 
       };
     }
 
-    // 4. CONFLICT CHECK
-    if (resolvedNewDate && newTime) {
+    if (resolvedNewDate && newTime && newTime.includes(':')) {
       const { data: conflict } = await supabase
         .from('appointments')
         .select('id')
@@ -121,56 +117,56 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
         .maybeSingle();
 
       if (conflict) {
-        return { statusCode: 200, headers, body: JSON.stringify({ success: false, message: "That new slot is already booked." }) };
+        return { 
+          statusCode: 200, headers, 
+          body: JSON.stringify({ success: false, message: "Sorry, that new slot is already booked by another patient." }) 
+        };
       }
+
+      const { data: updated, error: updateError } = await supabase
+        .from('appointments')
+        .update({ 
+          appointment_date: resolvedNewDate, 
+          appointment_time: newTime,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingAppt.id)
+        .select();
+
+      if (updateError) throw updateError;
+
+      // FIXED: Strictly checking the 'updated' variable to satisfy TS6133
+      const hasUpdated = updated && updated.length > 0;
+      if (!hasUpdated) {
+        return { 
+          statusCode: 200, headers, 
+          body: JSON.stringify({ success: false, message: "The update could not be applied. Please try again." }) 
+        };
+      }
+
+      return { 
+        statusCode: 200, headers, 
+        body: JSON.stringify({ 
+          success: true, 
+          message: `Successfully rescheduled! Your appointment with Dr. ${doctor.name} is moved to ${resolvedNewDate} at ${newTime}.` 
+        }) 
+      };
     } else {
       return { 
         statusCode: 200, headers, 
         body: JSON.stringify({ 
           success: true, 
           needsNewSlot: true,
-          message: `I found your appointment with Dr. ${doctor.name}. What is the new date you would like to reschedule to?` 
+          message: `I found your record for ${resolvedOldDate}. What is the new date and time you would like to move this appointment to?` 
         }) 
       };
     }
-
-    // 5. ATOMIC UPDATE
-    const { data: updated, error: updateError } = await supabase
-      .from('appointments')
-      .update({ 
-        appointment_date: resolvedNewDate, 
-        appointment_time: newTime,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', existingAppt.id)
-      .select();
-
-    if (updateError) throw updateError;
-
-    // FIX (TS6133): Use the 'updated' variable to verify row impact and satisfy the compiler
-    if (!updated || updated.length === 0) {
-      return { 
-        statusCode: 200, headers, 
-        body: JSON.stringify({ 
-          success: false, 
-          message: "The update failed to apply. Please try again." 
-        }) 
-      };
-    }
-
-    return { 
-      statusCode: 200, headers, 
-      body: JSON.stringify({ 
-        success: true, 
-        message: `Perfect! I've rescheduled your appointment. Dr. ${doctor.name} will now see you on ${resolvedNewDate} at ${newTime}.` 
-      }) 
-    };
 
   } catch (error: any) {
     console.error("[SMART_RESCHEDULE_ERROR]:", error.message);
     return { 
       statusCode: 200, headers, 
-      body: JSON.stringify({ success: false, message: "I'm having trouble updating the record. Please try again." }) 
+      body: JSON.stringify({ success: false, message: "I encountered a database error while rescheduling. Please try again later." }) 
     };
   }
 };
