@@ -35,7 +35,7 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
     text = cleanEnglishText(text);
 
     // Voice ID: EXAVITQu4vr4xnSDxMaL (Sarah - Professional English)
-    const voiceId = "QeKcckTBICc3UuWL7ETc";
+    const voiceId = "eKcckTBICc3UuWL7ETc";
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
 
     const response = await fetch(url, {

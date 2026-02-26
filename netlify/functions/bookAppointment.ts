@@ -1,4 +1,4 @@
-import { Handler } from '@netlify/functions';
+import { Handler, HandlerEvent, HandlerResponse } from '@netlify/functions';
 import { supabase } from './lib/supabaseClient';
 
 const headers = {
@@ -8,7 +8,7 @@ const headers = {
   'Content-Type': 'application/json'
 };
 
-export const handler: Handler = async (event) => {
+export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> => {
   // 1. Handle CORS preflight requests
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers, body: '' };
