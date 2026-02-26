@@ -29,7 +29,7 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // --- NEW: Phone Number Formatting for India (+91) ---
+    // --- Phone Number Formatting for India (+91) ---
     let formattedPhone = phone.trim();
     if (formattedPhone.length === 10) {
       formattedPhone = `+91${formattedPhone}`;
@@ -37,22 +37,44 @@ export const handler: Handler = async (event) => {
       formattedPhone = `+${formattedPhone}`;
     }
 
-    // 3. Resolve Doctor ID from Name
-    const { data: doctorData, error: doctorError } = await supabase
+    // --- STEP 3: Resolve Doctor ID from Name (ANTI-HALLUCINATION LOGIC) ---
+    // Clean the name (remove "Dr." and extra spaces) to ensure better matching
+    const searchName = doctorName.replace(/Dr\./gi, '').trim();
+
+    const { data: matchingDoctors, error: doctorError } = await supabase
       .from('doctors')
       .select('id, name')
-      .ilike('name', `%${doctorName}%`)
-      .single();
+      .ilike('name', `%${searchName}%`);
 
-    if (doctorError || !doctorData) {
+    if (doctorError || !matchingDoctors || matchingDoctors.length === 0) {
       return { 
         statusCode: 404, 
         headers, 
         body: JSON.stringify({ 
           success: false, 
-          message: `Doctor '${doctorName}' could not be identified in our system.` 
+          message: `Booking Failed: Doctor '${doctorName}' does not exist in our hospital records. Please select a doctor from our verified list.` 
         }) 
       };
+    }
+
+    // If multiple matches are found, we must ensure we aren't guessing
+    let doctorData;
+    if (matchingDoctors.length > 1) {
+      // Look for a strict match to see if the AI provided a full name
+      const strictMatch = matchingDoctors.find(d => d.name.toLowerCase().includes(searchName.toLowerCase()));
+      if (matchingDoctors.length > 1 && !strictMatch) {
+         return {
+           statusCode: 400,
+           headers,
+           body: JSON.stringify({
+             success: false,
+             message: `Ambiguity detected: Multiple doctors match '${doctorName}'. Please provide the full name to avoid booking with the wrong provider.`
+           })
+         };
+      }
+      doctorData = strictMatch || matchingDoctors[0];
+    } else {
+      doctorData = matchingDoctors[0];
     }
 
     // 4. ATOMIC SAFETY CHECK (Race Condition Protection)
@@ -88,7 +110,7 @@ export const handler: Handler = async (event) => {
         doctor_id: doctorData.id, 
         appointment_date: date, 
         appointment_time: time, 
-        phone: formattedPhone, // Use the formatted number in Supabase
+        phone: formattedPhone,
         status: 'confirmed'
       });
 
@@ -103,11 +125,11 @@ export const handler: Handler = async (event) => {
       try {
         const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
         const smsParams = new URLSearchParams();
-        smsParams.append('To', formattedPhone); // Use the formatted number for Twilio
+        smsParams.append('To', formattedPhone);
         smsParams.append('From', fromNumber);
         smsParams.append('Body', `Prudence Hospitals: Hi ${patientName}, your appointment with ${doctorData.name} is confirmed for ${date} at ${time}. Thank you!`);
 
-        const twilioRes = await fetch(
+        await fetch(
           `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
           {
             method: 'POST',
@@ -118,11 +140,8 @@ export const handler: Handler = async (event) => {
             body: smsParams.toString()
           }
         );
-        
-        const twilioData = await twilioRes.json();
-        console.log(`SMS notification status for ${formattedPhone}:`, twilioData.status);
       } catch (smsErr) {
-        console.error("SMS notification failed to send, but booking succeeded:", smsErr);
+        console.error("SMS notification failed:", smsErr);
       }
     }
     
