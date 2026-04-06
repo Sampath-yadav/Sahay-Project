@@ -34,8 +34,8 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
         // Prepare text for English synthesis
         text = cleanEnglishText(text);
 
-        // Voice ID: EXAVITQu4vr4xnSDxMaL (Sarah - Professional English)
-        const voiceId = "QeKcckTBICc3UuWL7Tc";
+        // Voice ID: QeKcckTBICc3UuWL7ETc (Liam - Professional English)
+        const voiceId = "QeKcckTBICc3UuWL7ETc";
         const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
 
         const response = await fetch(url, {
@@ -57,8 +57,15 @@ const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> =
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`ElevenLabs API Error: ${errorData.detail?.status || response.statusText}`);
+            let errorMessage = response.statusText;
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.detail?.message || errorData.detail?.status || errorMessage;
+            } catch {
+                const text = await response.text();
+                errorMessage = text || errorMessage;
+            }
+            throw new Error(`ElevenLabs API Error (${response.status}): ${errorMessage}`);
         }
 
         // Convert audio binary to Base64 for the frontend

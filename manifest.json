@@ -1,0 +1,24 @@
+{
+    "name": "Sahay - Health Assistant",
+    "short_name": "Sahay",
+    "description": "AI-powered health assistant by Prudence Hospitals. Book, reschedule, and cancel appointments by voice or text.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0a0a14",
+    "theme_color": "#0a0a14",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%230a0a14'/%3E%3Cpath d='M140 326c0-70 46-116 116-162 70 46 116 92 116 162 0 46-52 93-116 93s-116-47-116-93z' fill='%236080ff' fill-opacity='.12' stroke='%236080ff' stroke-width='12' stroke-linejoin='round'/%3E%3Cpath d='M186 280h35l23-46 35 93 23-46h46' stroke='%23a0b4ff' stroke-width='14' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E",
+            "sizes": "512x512",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='36' fill='%230a0a14'/%3E%3Cpath d='M52 122c0-26 17-44 44-61 26 17 44 35 44 61 0 17-20 35-44 35s-44-18-44-35z' fill='%236080ff' fill-opacity='.12' stroke='%236080ff' stroke-width='5' stroke-linejoin='round'/%3E%3Cpath d='M70 105h13l9-17 13 35 9-17h17' stroke='%23a0b4ff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E",
+            "sizes": "192x192",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}

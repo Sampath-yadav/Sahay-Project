@@ -3,66 +3,214 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0a0a14">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Sahay">
+    <meta name="description" content="Sahay — AI health assistant by Prudence Hospitals">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='36' fill='%230a0a14'/%3E%3Cpath d='M52 122c0-26 17-44 44-61 26 17 44 35 44 61 0 17-20 35-44 35s-44-18-44-35z' fill='%236080ff' fill-opacity='.12' stroke='%236080ff' stroke-width='5' stroke-linejoin='round'/%3E%3Cpath d='M70 105h13l9-17 13 35 9-17h17' stroke='%23a0b4ff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <title>Sahay - Prudence Health Assistant</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        *,
+        *::before,
+        *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: #060610;
+            min-height: 100vh;
+            min-height: 100dvh;
+            overflow: hidden;
         }
 
-        .dot {
-            animation: wave 1.3s linear infinite;
+        #root {
+            height: 100vh;
+            height: 100dvh;
         }
 
-        .dot:nth-child(2) {
-            animation-delay: -1.1s;
+        /* Pulse draw animation for Concept B logo */
+        .pulse-draw {
+            stroke-dasharray: 60;
+            stroke-dashoffset: 60;
+            animation: draw-loop 2s ease-in-out infinite;
         }
 
-        .dot:nth-child(3) {
-            animation-delay: -0.9s;
-        }
-
-        @keyframes wave {
-
-            0%,
-            60%,
-            100% {
-                transform: initial;
-            }
-
-            30% {
-                transform: translateY(-5px);
-            }
-        }
-
-        /* Pulse effect for listening mode */
-        .mic-active {
-            animation: pulse-red 1.5s infinite;
-        }
-
-        @keyframes pulse-red {
+        @keyframes draw-loop {
             0% {
-                transform: scale(1);
-                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+                stroke-dashoffset: 60;
+            }
+
+            50% {
+                stroke-dashoffset: 0;
+            }
+
+            100% {
+                stroke-dashoffset: -60;
+            }
+        }
+
+        /* Soundwave bars — listening (blue) */
+        .wave-bar {
+            width: 4px;
+            border-radius: 3px;
+            background: rgba(96, 130, 255, .12);
+            transition: height .15s, background .3s;
+        }
+
+        .waves-listening .wave-bar {
+            animation: wave-bar .8s ease-in-out infinite alternate;
+            background: rgba(96, 130, 255, .5);
+        }
+
+        .waves-listening .wave-bar:nth-child(odd) {
+            animation-duration: 1s;
+        }
+
+        .waves-listening .wave-bar:nth-child(3n) {
+            animation-duration: .65s;
+        }
+
+        .waves-listening .wave-bar:nth-child(5n) {
+            background: rgba(168, 130, 255, .4);
+        }
+
+        .waves-listening .wave-bar:nth-child(7n) {
+            background: rgba(130, 200, 255, .4);
+        }
+
+        /* Soundwave bars — speaking (green) */
+        .waves-speaking .wave-bar {
+            animation: wave-bar .9s ease-in-out infinite alternate;
+            background: rgba(74, 222, 128, .4);
+        }
+
+        .waves-speaking .wave-bar:nth-child(odd) {
+            animation-duration: 1.1s;
+        }
+
+        .waves-speaking .wave-bar:nth-child(3n) {
+            animation-duration: .7s;
+        }
+
+        .waves-speaking .wave-bar:nth-child(5n) {
+            background: rgba(52, 211, 153, .35);
+        }
+
+        .waves-speaking .wave-bar:nth-child(7n) {
+            background: rgba(110, 231, 183, .3);
+        }
+
+        /* Soundwave bars — thinking (subtle purple pulse) */
+        .waves-thinking .wave-bar {
+            animation: wave-think 1.5s ease-in-out infinite alternate;
+            background: rgba(168, 130, 255, .2);
+        }
+
+        @keyframes wave-think {
+            0% {
+                height: 8px;
+                opacity: .4;
+            }
+
+            100% {
+                height: 16px;
+                opacity: .7;
+            }
+        }
+
+        @keyframes wave-bar {
+            0% {
+                height: 10px;
+            }
+
+            100% {
+                height: var(--max-h, 60px);
+            }
+        }
+
+        /* Mic pulse for chat input */
+        .mic-pulse {
+            animation: mic-ring 1.5s infinite;
+        }
+
+        @keyframes mic-ring {
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, .3);
             }
 
             70% {
-                transform: scale(1.05);
-                box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+                box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
             }
 
             100% {
-                transform: scale(1);
                 box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
             }
+        }
+
+        /* Call active button pulse (green) */
+        .call-active-pulse {
+            animation: call-green-ring 2s infinite;
+        }
+
+        @keyframes call-green-ring {
+            0% {
+                box-shadow: 0 0 0 0 rgba(74, 222, 128, .25);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(74, 222, 128, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(74, 222, 128, 0);
+            }
+        }
+
+        /* Typing dots */
+        .typing-dot {
+            animation: t-bounce .6s infinite alternate;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: .15s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: .3s;
+        }
+
+        @keyframes t-bounce {
+            to {
+                background: #a0b4ff;
+                transform: translateY(-3px);
+            }
+        }
+
+        /* Scrollbar */
+        .msgs-scroll::-webkit-scrollbar {
+            width: 3px;
+        }
+
+        .msgs-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .msgs-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, .08);
+            border-radius: 3px;
         }
     </style>
 </head>
@@ -70,44 +218,115 @@
 <body>
     <div id="root"></div>
     <script type="text/babel">
-        const { useState, useEffect, useRef, useCallback } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
+        /* ── Concept B Logo SVG (reusable) ── */
+        function LogoMark({ size = 28 }) {
+            return (
+                <svg width={size} height={size} viewBox="0 0 44 44" fill="none">
+                    <path d="M12 28c0-6 4-10 10-14 6 4 10 8 10 14 0 4-4.5 8-10 8s-10-4-10-8z"
+                        fill="#6080ff" opacity=".08" stroke="#6080ff"
+                        strokeWidth={size > 40 ? "1.2" : "1.5"} strokeLinejoin="round" />
+                    <path className="pulse-draw"
+                        d="M16 24h3l2-4 3 8 2-4h4"
+                        stroke="#a0b4ff"
+                        strokeWidth={size > 40 ? "1.3" : "1.5"}
+                        strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+            );
+        }
+
+        /* ── Mic Icon SVG ── */
+        function MicIcon({ size = 20 }) {
+            return (
+                <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
+                </svg>
+            );
+        }
+
+        /* ── Phone End Icon SVG ── */
+        function PhoneEndIcon({ size = 20 }) {
+            return (
+                <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.73-1.68-1.36-2.66-1.85a.993.993 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
+                </svg>
+            );
+        }
+
+        /* ── Send Icon SVG ── */
+        function SendIcon() {
+            return (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="#a0b4ff">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                </svg>
+            );
+        }
+
+        /* ── Soundwave Bars ── */
+        function WaveBars({ waveState }) {
+            const bars = useMemo(() =>
+                Array.from({ length: 35 }, () => ({
+                    maxH: 20 + Math.random() * 50,
+                    delay: Math.random() * 0.6
+                }))
+                , []);
+
+            const waveClass = waveState === 'listening' ? 'waves-listening'
+                : waveState === 'speaking' ? 'waves-speaking'
+                    : waveState === 'thinking' ? 'waves-thinking'
+                        : '';
+
+            return (
+                <div className={`flex items-center justify-center gap-[3px] h-[100px] mb-7 ${waveClass}`}>
+                    {bars.map((b, i) => (
+                        <div key={i} className="wave-bar"
+                            style={{ height: '10px', '--max-h': b.maxH + 'px', animationDelay: b.delay + 's' }} />
+                    ))}
+                </div>
+            );
+        }
+
+        /* ═══════════════════════════════════
+           MAIN APP
+           ═══════════════════════════════════ */
         function App() {
             const [history, setHistory] = useState([
                 { role: 'model', parts: [{ text: "Hello! I am Sahay, your AI health assistant. How can I help you today?" }] }
             ]);
-            const [status, setStatus] = useState('idle'); // idle, listening, thinking, speaking
+            const [status, setStatus] = useState('idle');
             const [inputText, setInputText] = useState('');
-            // ──────────────────────────────────────────────
-            // FIX: Track live interim transcript separately
-            // so the input field shows words as user speaks
-            // ──────────────────────────────────────────────
             const [interimText, setInterimText] = useState('');
+            const [view, setView] = useState('voice');
+            // ──────────────────────────────────────────────
+            // NEW: callActive tracks the persistent call session.
+            // Using state (not just ref) so the UI re-renders
+            // when call starts/ends (button color, wave state).
+            // ──────────────────────────────────────────────
+            const [callActive, setCallActive] = useState(false);
 
             const chatEndRef = useRef(null);
             const recognitionRef = useRef(null);
             const audioPlayerRef = useRef(new Audio());
             const timeoutRef = useRef(null);
-            // FIX: Track status in a ref so callbacks always see current value
             const statusRef = useRef('idle');
+            // Ref mirror for callActive — callbacks need instant access
+            const callActiveRef = useRef(false);
+            // Ref to access latest history inside callbacks
+            const historyRef = useRef(history);
 
-            // Keep statusRef in sync with status state
             useEffect(() => { statusRef.current = status; }, [status]);
-
+            useEffect(() => { callActiveRef.current = callActive; }, [callActive]);
+            useEffect(() => { historyRef.current = history; }, [history]);
             useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
 
-            // ──────────────────────────────────────────────
-            // FIX: Pre-warm SpeechRecognition on mount
-            // Creates the instance once so mic click doesn't
-            // pay the 500-1500ms cold-start penalty every time.
-            // ──────────────────────────────────────────────
+            /* Pre-warm Speech Recognition */
             useEffect(() => {
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                if (SpeechRecognition) {
-                    recognitionRef.current = new SpeechRecognition();
-                }
+                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (SR) recognitionRef.current = new SR();
             }, []);
 
+            /* ── TTS Playback ── */
             const playVoice = async (text) => {
                 try {
                     setStatus('speaking');
@@ -116,21 +335,44 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ text }),
                     });
-
+                    if (!response.ok) {
+                        const errData = await response.json().catch(() => ({}));
+                        console.error(`TTS Error (${response.status}):`, errData.details || errData.error || response.statusText);
+                        throw new Error(`TTS failed: ${response.status}`);
+                    }
                     const data = await response.json();
                     if (data.audioContent) {
                         audioPlayerRef.current.src = `data:audio/mpeg;base64,${data.audioContent}`;
                         audioPlayerRef.current.play();
-                        audioPlayerRef.current.onended = () => setStatus('idle');
+                        // ──────────────────────────────────────────────
+                        // CHANGED: When audio ends, auto-restart mic
+                        // if call is still active. Otherwise go idle.
+                        // ──────────────────────────────────────────────
+                        audioPlayerRef.current.onended = () => {
+                            if (callActiveRef.current) {
+                                startMic();
+                            } else {
+                                setStatus('idle');
+                            }
+                        };
                     } else {
-                        setStatus('idle');
+                        if (callActiveRef.current) {
+                            startMic();
+                        } else {
+                            setStatus('idle');
+                        }
                     }
                 } catch (error) {
                     console.error("Voice Error:", error);
-                    setStatus('idle');
+                    if (callActiveRef.current) {
+                        startMic();
+                    } else {
+                        setStatus('idle');
+                    }
                 }
             };
 
+            /* ── AI Response (preserved) ── */
             const getAiReply = async (currentHistory) => {
                 setStatus('thinking');
                 try {
@@ -139,100 +381,83 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ history: currentHistory }),
                     });
-
                     const data = await response.json();
                     const aiReply = data.reply || "I apologize, I couldn't retrieve a response.";
-
                     const updatedHistory = [...currentHistory, { role: 'model', parts: [{ text: aiReply }] }];
                     setHistory(updatedHistory);
                     playVoice(aiReply);
                 } catch (error) {
                     console.error("AI Error:", error);
-                    setStatus('idle');
+                    if (callActiveRef.current) {
+                        startMic();
+                    } else {
+                        setStatus('idle');
+                    }
                 }
             };
 
-            // Enhanced Microphone Logic
+            /* ── Microphone Logic ── */
             const startMic = () => {
-                // 1. Cancel any active audio or existing recognition
+                // Don't start if call was ended during an async gap
+                if (!callActiveRef.current && view === 'voice') {
+                    setStatus('idle');
+                    return;
+                }
+
                 audioPlayerRef.current.pause();
                 audioPlayerRef.current.currentTime = 0;
                 if (recognitionRef.current) {
-                    try { recognitionRef.current.stop(); } catch (e) { /* already stopped */ }
+                    try { recognitionRef.current.stop(); } catch (e) { }
                 }
                 clearTimeout(timeoutRef.current);
                 setInterimText('');
 
-                // 2. Initialize Speech Recognition
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                if (!SpeechRecognition) {
+                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SR) {
                     setHistory(prev => [...prev, { role: 'model', parts: [{ text: "Voice recognition is not supported in this browser." }] }]);
                     return;
                 }
 
-                // ──────────────────────────────────────────────
-                // FIX: Re-use existing instance or create fresh
-                // Avoids cold-start on subsequent clicks.
-                // ──────────────────────────────────────────────
-                const rec = recognitionRef.current || new SpeechRecognition();
+                const rec = recognitionRef.current || new SR();
                 rec.lang = 'en-US';
                 rec.continuous = false;
-                // ──────────────────────────────────────────────
-                // FIX: Enable interim results
-                // Old: rec.interimResults = false
-                //   → User sees nothing until full sentence processed
-                // New: rec.interimResults = true
-                //   → Words appear in input field as user speaks
-                //   → Eliminates perceived "is it working?" delay
-                // ──────────────────────────────────────────────
                 rec.interimResults = true;
 
                 rec.onstart = () => {
                     setStatus('listening');
                     setInterimText('');
-                    // 3. Set timeout if no audio detected at all
                     timeoutRef.current = setTimeout(() => {
                         rec.stop();
                         if (statusRef.current === 'listening') {
-                            setStatus('idle');
-                            setInterimText('');
-                            setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn't catch that, please repeat." }] }]);
+                            // ──────────────────────────────────────────────
+                            // CHANGED: During active call, silence = quietly
+                            // re-listen. Don't post error messages.
+                            // Outside call = original behavior.
+                            // ──────────────────────────────────────────────
+                            if (callActiveRef.current) {
+                                startMic();
+                            } else {
+                                setStatus('idle');
+                                setInterimText('');
+                                setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn't catch that, please repeat." }] }]);
+                            }
                         }
                     }, 3500);
                 };
 
-                rec.onspeechstart = () => {
-                    clearTimeout(timeoutRef.current); // Detected voice, cancel the initial timeout
-                };
+                rec.onspeechstart = () => { clearTimeout(timeoutRef.current); };
 
-                // ──────────────────────────────────────────────
-                // FIX: Handle both interim and final results
-                // Old: only processed final result (e.results[0][0])
-                // New: interim results update the input field live,
-                //      final result triggers the AI call.
-                // ──────────────────────────────────────────────
                 rec.onresult = (e) => {
                     let finalTranscript = '';
                     let interimTranscript = '';
-
                     for (let i = 0; i < e.results.length; i++) {
-                        const result = e.results[i];
-                        if (result.isFinal) {
-                            finalTranscript += result[0].transcript;
-                        } else {
-                            interimTranscript += result[0].transcript;
-                        }
+                        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript;
+                        else interimTranscript += e.results[i][0].transcript;
                     }
-
-                    // Show interim words in real-time in the input field
-                    if (interimTranscript) {
-                        setInterimText(interimTranscript);
-                    }
-
-                    // When we have the final transcript, send it
+                    if (interimTranscript) setInterimText(interimTranscript);
                     if (finalTranscript.trim()) {
                         setInterimText('');
-                        const newHistory = [...history, { role: 'user', parts: [{ text: finalTranscript.trim() }] }];
+                        const newHistory = [...historyRef.current, { role: 'user', parts: [{ text: finalTranscript.trim() }] }];
                         setHistory(newHistory);
                         getAiReply(newHistory);
                     }
@@ -241,22 +466,62 @@
                 rec.onerror = (event) => {
                     console.error("Speech Error:", event.error);
                     setInterimText('');
-                    if (event.error === 'no-speech') {
-                        setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn't catch that, please repeat." }] }]);
+                    // ──────────────────────────────────────────────
+                    // CHANGED: During active call, errors = re-listen.
+                    // Outside call = original behavior.
+                    // ──────────────────────────────────────────────
+                    if (callActiveRef.current) {
+                        setTimeout(() => startMic(), 300);
+                    } else {
+                        if (event.error === 'no-speech') {
+                            setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn't catch that, please repeat." }] }]);
+                        }
+                        setStatus('idle');
                     }
-                    setStatus('idle');
                 };
 
                 rec.onend = () => {
                     setInterimText('');
-                    // Ensure state clears if not already processing AI response
-                    if (statusRef.current === 'listening') setStatus('idle');
+                    // ──────────────────────────────────────────────
+                    // CHANGED: During active call, if we're still in
+                    // listening state (no final result captured),
+                    // auto-restart. This handles the gap between
+                    // rec.stop() and the next rec.start().
+                    // ──────────────────────────────────────────────
+                    if (callActiveRef.current && statusRef.current === 'listening') {
+                        startMic();
+                    } else if (!callActiveRef.current && statusRef.current === 'listening') {
+                        setStatus('idle');
+                    }
                 };
 
                 recognitionRef.current = rec;
                 rec.start();
             };
 
+            /* ── CALL / END Toggle ── */
+            const toggleCall = () => {
+                if (callActive) {
+                    // ── END CALL ──
+                    callActiveRef.current = false;
+                    setCallActive(false);
+                    clearTimeout(timeoutRef.current);
+                    if (recognitionRef.current) {
+                        try { recognitionRef.current.stop(); } catch (e) { }
+                    }
+                    audioPlayerRef.current.pause();
+                    audioPlayerRef.current.currentTime = 0;
+                    setInterimText('');
+                    setStatus('idle');
+                } else {
+                    // ── START CALL ──
+                    callActiveRef.current = true;
+                    setCallActive(true);
+                    startMic();
+                }
+            };
+
+            /* ── Text Submit (preserved) ── */
             const handleTextSubmit = (e) => {
                 e.preventDefault();
                 if (!inputText.trim() || status !== 'idle') return;
@@ -266,83 +531,222 @@
                 getAiReply(newHistory);
             };
 
-            return (
-                <div className="flex items-center justify-center min-h-screen p-2 md:p-6">
-                    <div className="w-full max-w-md h-[90vh] bg-white rounded-[2.5rem] shadow-2xl flex flex-col border border-white overflow-hidden relative">
+            const isListening = status === 'listening';
+            const isThinking = status === 'thinking';
+            const isSpeaking = status === 'speaking';
+            const isBusy = isThinking || isSpeaking;
 
-                        {/* Branding Header */}
-                        <div className="bg-blue-700 p-6 text-white text-center rounded-b-[2rem] shadow-lg">
-                            <h1 className="text-xl font-bold tracking-tight uppercase">Prudence Hospitals</h1>
-                            <div className="flex items-center justify-center gap-2 mt-1">
-                                <span className={`w-2 h-2 rounded-full ${status === 'idle' ? 'bg-green-400' : 'bg-amber-400 animate-pulse'}`}></span>
-                                <p className="text-[10px] uppercase tracking-widest font-bold opacity-90">Sahay AI Health Assistant</p>
+            // ──────────────────────────────────────────────
+            // NEW: Wave state for Voice view
+            // During active call, waves respond to ALL phases.
+            // Outside call, waves only respond to listening.
+            // ──────────────────────────────────────────────
+            const waveState = callActive
+                ? (isListening ? 'listening' : (isSpeaking || isThinking) ? 'speaking' : 'idle')
+                : (isListening ? 'listening' : 'idle');
+
+            // Status text for voice view
+            const voiceStatusText = callActive
+                ? (isListening ? (interimText || 'Listening...') :
+                    isSpeaking ? 'Sahay is speaking...' :
+                        isThinking ? 'Thinking...' : 'In call...')
+                : 'Tap to start speaking';
+
+            const voiceStatusColor = callActive
+                ? (isListening ? 'rgba(96,130,255,.6)' :
+                    isSpeaking ? 'rgba(74,222,128,.6)' :
+                        isThinking ? 'rgba(168,130,255,.5)' : 'rgba(74,222,128,.4)')
+                : 'rgba(255,255,255,.22)';
+
+            return (
+                <div className="flex items-center justify-center h-full" style={{ background: '#060610' }}>
+                    <div className="w-full max-w-[430px] h-full flex flex-col"
+                        style={{ background: '#0a0a14' }}>
+
+                        {/* ━━━ HEADER ━━━ */}
+                        <div className="flex justify-between items-center px-5 pt-4 pb-3"
+                            style={{ background: 'rgba(255,255,255,.02)' }}>
+                            <div className="flex items-center gap-2.5">
+                                <LogoMark size={28} />
+                                <div>
+                                    <div className="text-[15px] font-bold tracking-tight"
+                                        style={{ color: '#e2e8f0', letterSpacing: '-.02em' }}>Sahay</div>
+                                    <div className="text-[8px] font-medium tracking-widest"
+                                        style={{ color: 'rgba(160,180,255,.45)' }}>YOUR HEALTH COMPANION</div>
+                                </div>
+                            </div>
+                            <div className="text-[9px] font-semibold px-2.5 py-1 rounded-lg"
+                                style={{
+                                    background: 'rgba(74,222,128,.1)', color: '#4ade80',
+                                    border: '.5px solid rgba(74,222,128,.15)', letterSpacing: '.05em'
+                                }}>
+                                PRUDENCE
                             </div>
                         </div>
 
-                        {/* Message Area */}
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
-                            {history.map((turn, i) => (
-                                <div key={i} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                    <div className={`p-4 rounded-2xl max-w-[85%] text-sm leading-relaxed shadow-sm ${turn.role === 'user'
-                                        ? 'bg-blue-600 text-white rounded-tr-none'
-                                        : 'bg-white text-slate-800 border border-slate-100 rounded-tl-none'
-                                        }`}>
-                                        <p>{turn.parts[0].text}</p>
-                                    </div>
-                                </div>
+                        {/* Divider */}
+                        <div className="mx-5" style={{ height: '.5px', background: 'rgba(255,255,255,.04)' }} />
+
+                        {/* ━━━ VIEW TOGGLE ━━━ */}
+                        <div className="mx-5 mt-3 flex rounded-xl overflow-hidden"
+                            style={{ background: 'rgba(255,255,255,.05)', border: '.5px solid rgba(255,255,255,.06)' }}>
+                            {['voice', 'chat'].map(v => (
+                                <button key={v} onClick={() => setView(v)}
+                                    className="flex-1 py-2 text-[11px] font-semibold rounded-[10px] transition-all duration-300"
+                                    style={{
+                                        background: view === v ? 'rgba(96,130,255,.14)' : 'transparent',
+                                        color: view === v ? '#a0b4ff' : 'rgba(255,255,255,.3)'
+                                    }}>
+                                    {v.charAt(0).toUpperCase() + v.slice(1)}
+                                </button>
                             ))}
-                            {(status === 'thinking' || status === 'speaking' || status === 'listening') && (
-                                <div className="flex justify-start">
-                                    <div className="bg-white px-5 py-4 rounded-2xl rounded-tl-none border border-slate-100 shadow-sm flex items-center space-x-1">
-                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : status === 'listening' ? 'bg-red-400' : 'bg-blue-400'} rounded-full dot`}></div>
-                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : status === 'listening' ? 'bg-red-400' : 'bg-blue-400'} rounded-full dot`}></div>
-                                        <div className={`w-2 h-2 ${status === 'speaking' ? 'bg-green-400' : status === 'listening' ? 'bg-red-400' : 'bg-blue-400'} rounded-full dot`}></div>
-                                        {status === 'listening' && <span className="text-[10px] text-slate-400 ml-2 uppercase font-bold tracking-tighter">Listening...</span>}
-                                    </div>
+                        </div>
+
+                        {/* ━━━ VOICE VIEW ━━━ */}
+                        {view === 'voice' && (
+                            <div className="flex-1 flex flex-col items-center justify-center px-5 py-6">
+                                <div className="mb-2 opacity-85"><LogoMark size={52} /></div>
+                                <div className="text-[30px] font-bold mb-1"
+                                    style={{ color: 'rgba(255,255,255,.92)', letterSpacing: '-.02em' }}>Sahay</div>
+                                <div className="text-[10px] font-medium tracking-widest mb-4"
+                                    style={{ color: 'rgba(160,180,255,.4)' }}>YOUR HEALTH COMPANION</div>
+                                <p className="text-[13px] text-center leading-relaxed max-w-[270px] mb-9"
+                                    style={{ color: 'rgba(255,255,255,.28)' }}>
+                                    Schedule medical appointments effortlessly using your voice.
+                                    Simply tap the button and speak!
+                                </p>
+
+                                <WaveBars waveState={waveState} />
+
+                                {/* ── CALL / END Button ── */}
+                                <button onClick={toggleCall}
+                                    className={`flex items-center gap-2.5 px-11 py-3.5 rounded-full text-[15px] font-semibold transition-all duration-250 ${callActive ? 'call-active-pulse' : ''}`}
+                                    style={{
+                                        background: callActive
+                                            ? 'rgba(74,222,128,.12)'
+                                            : 'rgba(255,255,255,.07)',
+                                        border: callActive
+                                            ? '.5px solid rgba(74,222,128,.3)'
+                                            : '.5px solid rgba(255,255,255,.1)',
+                                        color: callActive
+                                            ? '#4ade80'
+                                            : 'rgba(255,255,255,.8)',
+                                        letterSpacing: '.05em'
+                                    }}>
+                                    {callActive ? <PhoneEndIcon size={20} /> : <MicIcon size={20} />}
+                                    {callActive ? 'END' : 'CALL'}
+                                </button>
+
+                                {/* Status text */}
+                                <p className="text-[11px] mt-3.5 min-h-[16px] transition-colors"
+                                    style={{ color: voiceStatusColor }}>
+                                    {voiceStatusText}
+                                </p>
+                            </div>
+                        )}
+
+                        {/* ━━━ CHAT VIEW ━━━ */}
+                        {view === 'chat' && (
+                            <div className="flex-1 flex flex-col min-h-0">
+                                {/* Messages */}
+                                <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2.5 msgs-scroll">
+                                    {history.map((turn, i) => (
+                                        <div key={i} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                            <div className="max-w-[82%] px-3.5 py-2.5 text-[12.5px] leading-relaxed rounded-2xl"
+                                                style={turn.role === 'user' ? {
+                                                    background: 'rgba(96,130,255,.13)',
+                                                    color: '#c8d6ff',
+                                                    borderBottomRightRadius: '4px',
+                                                    border: '.5px solid rgba(96,130,255,.08)'
+                                                } : {
+                                                    background: 'rgba(255,255,255,.05)',
+                                                    color: 'rgba(255,255,255,.75)',
+                                                    borderBottomLeftRadius: '4px',
+                                                    border: '.5px solid rgba(255,255,255,.05)'
+                                                }}>
+                                                {turn.role === 'model' && (
+                                                    <div className="text-[9px] font-semibold mb-1"
+                                                        style={{ color: 'rgba(255,255,255,.28)', letterSpacing: '.05em' }}>SAHAY</div>
+                                                )}
+                                                <p>{turn.parts[0].text}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {/* Typing / Listening / Speaking indicator */}
+                                    {(isThinking || isSpeaking || isListening) && (
+                                        <div className="flex justify-start">
+                                            <div className="flex items-center gap-1 px-3.5 py-2 rounded-2xl"
+                                                style={{
+                                                    background: 'rgba(255,255,255,.03)',
+                                                    border: '.5px solid rgba(255,255,255,.05)',
+                                                    borderBottomLeftRadius: '4px'
+                                                }}>
+                                                <div className="w-[5px] h-[5px] rounded-full typing-dot"
+                                                    style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,255,.35)' }} />
+                                                <div className="w-[5px] h-[5px] rounded-full typing-dot"
+                                                    style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,255,.35)' }} />
+                                                <div className="w-[5px] h-[5px] rounded-full typing-dot"
+                                                    style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,255,.35)' }} />
+                                                {isListening && (
+                                                    <span className="text-[9px] font-semibold ml-1.5"
+                                                        style={{ color: 'rgba(239,68,68,.5)', letterSpacing: '.04em' }}>
+                                                        {interimText || 'Listening...'}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                    <div ref={chatEndRef} />
                                 </div>
-                            )}
-                            <div ref={chatEndRef} />
-                        </div>
 
-                        {/* Bottom Input Bar */}
-                        <div className="p-4 bg-white border-t border-slate-100">
-                            <form onSubmit={handleTextSubmit} className="flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={startMic}
-                                    className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${status === 'listening'
-                                        ? 'bg-red-500 text-white mic-active'
-                                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                                        }`}
-                                    disabled={status === 'thinking'}
-                                >
-                                    <i className={`fas ${status === 'listening' ? 'fa-stop' : 'fa-microphone'}`}></i>
-                                </button>
+                                {/* ━━━ CHAT INPUT BAR ━━━ */}
+                                <div className="flex items-center gap-2.5 px-4 py-3"
+                                    style={{
+                                        borderTop: '.5px solid rgba(255,255,255,.05)',
+                                        background: 'rgba(255,255,255,.015)'
+                                    }}>
+                                    {/* Mic button — stops call if active, otherwise starts mic */}
+                                    <button onClick={callActive ? toggleCall : startMic} disabled={!callActive && isBusy}
+                                        className={`w-[42px] h-[42px] rounded-full flex items-center justify-center flex-shrink-0 transition-all ${isListening ? 'mic-pulse' : ''} ${callActive ? 'call-active-pulse' : ''}`}
+                                        style={{
+                                            background: callActive ? 'rgba(239,68,68,.15)' : isListening ? 'rgba(239,68,68,.15)' : 'rgba(255,255,255,.05)',
+                                            border: callActive ? '.5px solid rgba(239,68,68,.3)' : isListening ? '.5px solid rgba(239,68,68,.3)' : '.5px solid rgba(255,255,255,.08)',
+                                            color: callActive ? '#fca5a5' : isListening ? '#fca5a5' : 'rgba(255,255,255,.45)',
+                                            opacity: (!callActive && isBusy) ? 0.4 : 1
+                                        }}>
+                                        {callActive ? <PhoneEndIcon size={16} /> : <MicIcon size={16} />}
+                                    </button>
 
-                                <input
-                                    type="text"
-                                    // ──────────────────────────────────────────────
-                                    // FIX: Show interim transcript in the input field
-                                    // When listening, the field shows live words as
-                                    // the user speaks. When idle, shows typed text.
-                                    // ──────────────────────────────────────────────
-                                    value={status === 'listening' ? interimText : inputText}
-                                    onChange={(e) => setInputText(e.target.value)}
-                                    placeholder={status === 'listening' ? (interimText ? '' : "Listening to your voice...") : "Type your message here..."}
-                                    className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all"
-                                    disabled={status !== 'idle'}
-                                    readOnly={status === 'listening'}
-                                />
-
-                                <button
-                                    type="submit"
-                                    className="bg-blue-600 text-white rounded-2xl w-12 h-12 flex items-center justify-center hover:bg-blue-700 transition shadow-lg disabled:opacity-50"
-                                    disabled={status !== 'idle' || !inputText.trim()}
-                                >
-                                    <i className="fas fa-paper-plane"></i>
-                                </button>
-                            </form>
-                        </div>
+                                    {/* Text input */}
+                                    <form onSubmit={handleTextSubmit} className="flex-1 flex items-center gap-2.5">
+                                        <input
+                                            type="text"
+                                            value={isListening ? interimText : inputText}
+                                            onChange={(e) => setInputText(e.target.value)}
+                                            placeholder={isListening ? (interimText ? '' : 'Listening...') : 'Type your message...'}
+                                            disabled={isBusy}
+                                            readOnly={isListening}
+                                            className="flex-1 py-2.5 px-4 rounded-[22px] text-[12.5px] outline-none transition-colors"
+                                            style={{
+                                                background: 'rgba(255,255,255,.04)',
+                                                border: '.5px solid rgba(255,255,255,.07)',
+                                                color: 'rgba(255,255,255,.8)',
+                                            }}
+                                        />
+                                        {/* Send button */}
+                                        <button type="submit"
+                                            disabled={status !== 'idle' || !inputText.trim()}
+                                            className="w-[42px] h-[42px] rounded-[14px] flex items-center justify-center flex-shrink-0 transition-colors"
+                                            style={{
+                                                background: 'rgba(96,130,255,.2)',
+                                                opacity: (status !== 'idle' || !inputText.trim()) ? 0.3 : 1
+                                            }}>
+                                            <SendIcon />
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
@@ -350,6 +754,15 @@
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
+    </script>
+
+    <!-- PWA Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js').catch(() => { });
+            });
+        }
     </script>
 </body>
 
