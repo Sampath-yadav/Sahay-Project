@@ -1,77 +1,84 @@
-// FILE: netlify/functions/textToSpeech.ts
-import { GoogleAuth } from 'google-auth-library';
-import type { Handler, HandlerEvent } from '@netlify/functions';
+import { Handler, HandlerEvent, HandlerResponse } from '@netlify/functions';
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json'
+/**
+ * Clean Text for TTS:
+ * Removes unnecessary symbols to ensure a smooth English flow
+ * without robotic pauses.
+ */
+const cleanEnglishText = (text: string): string => {
+    return text
+        .replace(/[#*`]/g, '') // Remove markdown formatting
+        .replace(/\s+/g, ' ')  // Normalize whitespace
+        .trim();
 };
 
-const handler: Handler = async (event: HandlerEvent) => {
-    if (event.httpMethod === 'OPTIONS') {
-        return { statusCode: 200, headers };
-    }
-    if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY) {
-        return { statusCode: 500, headers, body: JSON.stringify({ error: "Google Service Account key is not configured." }) };
-    }
+const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> => {
+    const headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Content-Type': 'application/json'
+    };
+
+    if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
     try {
-        const { text } = JSON.parse(event.body || '{}');
-        if (!text) {
-            return { statusCode: 400, headers, body: JSON.stringify({ error: "No text provided to synthesize." }) };
-        }
+        const apiKey = process.env.ELEVENLABS_API_KEY;
+        if (!apiKey) throw new Error("ELEVENLABS_API_KEY missing in environment variables.");
 
-        const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
-        const authClient = new GoogleAuth({
-            credentials,
-            scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-        });
-        const client = await authClient.getClient();
-        const accessToken = await client.getAccessToken();
+        const body = JSON.parse(event.body || '{}');
+        let { text } = body;
 
-        const url = `https://texttospeech.googleapis.com/v1/text:synthesize`;
+        if (!text) return { statusCode: 400, headers, body: JSON.stringify({ error: "No text provided." }) };
 
-        const requestBody = {
-            input: { text },
-            voice: {
-                languageCode: 'te-IN',
-                // --- CHANGE IS HERE: Using a different, valid Telugu voice name ---
-                name: 'te-IN-Standard-A'
-            },
-            audioConfig: {
-                audioEncoding: 'MP3'
-            }
-        };
+        // Prepare text for English synthesis
+        text = cleanEnglishText(text);
 
-        const ttsResponse = await fetch(url, {
+        // Voice ID: EXAVITQu4vr4xnSDxMaL (Sarah - Professional English)
+        const voiceId = "QeKcckTBICc3UuWL7Tc";
+        const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+
+        const response = await fetch(url, {
             method: 'POST',
-            headers: { 
+            headers: {
+                'xi-api-key': apiKey,
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken.token}`
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify({
+                text: text,
+                model_id: "eleven_turbo_v2_5", // Optimized for English (Fast & Accurate)
+                voice_settings: {
+                    stability: 0.5,           // Balanced for professional consistency
+                    similarity_boost: 0.75,    // High clarity for English pronunciation
+                    style: 0.0,                // Neutral, professional tone
+                    use_speaker_boost: true    // Enhances voice presence
+                }
+            })
         });
 
-        if (!ttsResponse.ok) {
-            const errorDetails = await ttsResponse.json();
-            console.error("Google TTS API Error:", errorDetails);
-            throw new Error(`Google TTS API responded with status ${ttsResponse.status}`);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`ElevenLabs API Error: ${errorData.detail?.status || response.statusText}`);
         }
 
-        const ttsData = await ttsResponse.json();
-        
+        // Convert audio binary to Base64 for the frontend
+        const audioBuffer = await response.arrayBuffer();
+        const base64Audio = Buffer.from(audioBuffer).toString('base64');
+
         return {
             statusCode: 200,
             headers,
-            body: JSON.stringify({ audioContent: ttsData.audioContent })
+            body: JSON.stringify({ audioContent: base64Audio })
         };
 
     } catch (error: any) {
-        console.error("FATAL: Error in textToSpeech function.", error);
-        return { statusCode: 500, headers, body: JSON.stringify({ error: `Failed to process text-to-speech request: ${error.message}` }) };
+        console.error("English Voice Service Error:", error.message);
+        return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ error: "Voice synthesis failed", details: error.message })
+        };
     }
 };
 
 export { handler };
-
