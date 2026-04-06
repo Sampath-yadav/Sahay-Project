@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import type { Handler, HandlerEvent } from '@netlify/functions';
 
 const headers = {
@@ -56,32 +56,32 @@ export const handler: Handler = async (event: HandlerEvent) => {
                     { 
                         name: "getAvailableSlots", 
                         description: "Check available times for a doctor.", 
-                        parameters: { type: "OBJECT", properties: { doctorName: { type: "STRING" }, date: { type: "STRING" }, timeOfDay: { type: "STRING" } }, required: ["doctorName", "date"] } 
+                        parameters: { type: SchemaType.OBJECT, properties: { doctorName: { type: SchemaType.STRING }, date: { type: SchemaType.STRING }, timeOfDay: { type: SchemaType.STRING } }, required: ["doctorName", "date"] }
                     },
-                    { 
-                        name: "getAllSpecialties", 
-                        description: "List hospital departments.", 
-                        parameters: { type: "OBJECT", properties: {} } 
+                    {
+                        name: "getAllSpecialties",
+                        description: "List hospital departments.",
+                        parameters: { type: SchemaType.OBJECT, properties: {} }
                     },
-                    { 
-                        name: "getDoctorDetails", 
-                        description: "Find doctors by name or specialty.", 
-                        parameters: { type: "OBJECT", properties: { doctorName: { type: "STRING" }, specialty: { type: "STRING" } } } 
+                    {
+                        name: "getDoctorDetails",
+                        description: "Find doctors by name or specialty.",
+                        parameters: { type: SchemaType.OBJECT, properties: { doctorName: { type: SchemaType.STRING }, specialty: { type: SchemaType.STRING } } }
                     },
-                    { 
-                        name: "bookAppointment", 
-                        description: "Create a new booking.", 
-                        parameters: { type: "OBJECT", properties: { doctorName: { type: "STRING" }, patientName: { type: "STRING" }, phone: { type: "STRING" }, date: { type: "STRING" }, time: { type: "STRING" } }, required: ["doctorName", "patientName", "phone", "date", "time"] } 
+                    {
+                        name: "bookAppointment",
+                        description: "Create a new booking.",
+                        parameters: { type: SchemaType.OBJECT, properties: { doctorName: { type: SchemaType.STRING }, patientName: { type: SchemaType.STRING }, phone: { type: SchemaType.STRING }, date: { type: SchemaType.STRING }, time: { type: SchemaType.STRING } }, required: ["doctorName", "patientName", "phone", "date", "time"] }
                     },
-                    { 
-                        name: "cancelAppointment", 
-                        description: "Cancel an existing booking.", 
-                        parameters: { type: "OBJECT", properties: { doctorName: { type: "STRING" }, patientName: { type: "STRING" }, date: { type: "STRING" } }, required: ["doctorName", "patientName", "date"] } 
+                    {
+                        name: "cancelAppointment",
+                        description: "Cancel an existing booking.",
+                        parameters: { type: SchemaType.OBJECT, properties: { doctorName: { type: SchemaType.STRING }, patientName: { type: SchemaType.STRING }, date: { type: SchemaType.STRING } }, required: ["doctorName", "patientName", "date"] }
                     },
-                    { 
-                        name: "rescheduleAppointment", 
-                        description: "Change an appointment date/time.", 
-                        parameters: { type: "OBJECT", properties: { patientName: { type: "STRING" }, doctorName: { type: "STRING" }, oldDate: { type: "STRING" }, newDate: { type: "STRING" }, newTime: { type: "STRING" } }, required: ["patientName", "doctorName", "oldDate", "newDate", "newTime"] } 
+                    {
+                        name: "rescheduleAppointment",
+                        description: "Change an appointment date/time.",
+                        parameters: { type: SchemaType.OBJECT, properties: { patientName: { type: SchemaType.STRING }, doctorName: { type: SchemaType.STRING }, oldDate: { type: SchemaType.STRING }, newDate: { type: SchemaType.STRING }, newTime: { type: SchemaType.STRING } }, required: ["patientName", "doctorName", "oldDate", "newDate", "newTime"] }
                     },
                 ],
             }],

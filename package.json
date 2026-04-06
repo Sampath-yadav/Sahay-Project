@@ -1,14 +1,26 @@
 {
+  "name": "medicall-cloud-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Prudence Hospitals - AI Health Assistant (Sahay) with Netlify Functions backend",
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf node_modules package-lock.json"
+  },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@netlify/functions": "^4.1.12",
     "@supabase/supabase-js": "^2.52.0",
+    "google-auth-library": "^10.5.0"
+  },
+  "devDependencies": {
     "@tailwindcss/postcss": "^4.1.11",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.21",
-    "google-auth-library": "^10.5.0",
     "postcss": "^8.5.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

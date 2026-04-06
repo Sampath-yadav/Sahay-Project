@@ -1,5 +1,5 @@
 // FILE: netlify/functions/textToSpeech.ts
-import { auth } from 'google-auth-library';
+import { GoogleAuth } from 'google-auth-library';
 import type { Handler, HandlerEvent } from '@netlify/functions';
 
 const headers = {
@@ -23,8 +23,11 @@ const handler: Handler = async (event: HandlerEvent) => {
         }
 
         const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
-        const client = auth.fromJSON(credentials);
-        client.scopes = ['https://www.googleapis.com/auth/cloud-platform'];
+        const authClient = new GoogleAuth({
+            credentials,
+            scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+        });
+        const client = await authClient.getClient();
         const accessToken = await client.getAccessToken();
 
         const url = `https://texttospeech.googleapis.com/v1/text:synthesize`;
