@@ -53,15 +53,15 @@ const tools = [
         type: "function",
         function: {
             name: "rescheduleAppointment",
-            description: "Modify an existing confirmed booking.",
+            description: "Reschedule an existing confirmed appointment to a new date and/or time. Call this once you have: patient name, doctor name, old appointment date, AND the new date and new time. Convert ALL dates to YYYY-MM-DD and ALL times to HH:MM (24-hour) format before calling. Example: '9 AM' becomes '09:00', '2 PM' becomes '14:00'.",
             parameters: {
                 type: "object",
                 properties: {
-                    patientName: { type: "string" },
-                    doctorName: { type: "string" },
-                    oldDate: { type: "string" },
-                    newDate: { type: "string" },
-                    newTime: { type: "string" }
+                    patientName: { type: "string", description: "The patient's full name." },
+                    doctorName: { type: "string", description: "The doctor's name as known in the system." },
+                    oldDate: { type: "string", description: "Original appointment date in YYYY-MM-DD format." },
+                    newDate: { type: "string", description: "New desired date in YYYY-MM-DD format." },
+                    newTime: { type: "string", description: "New desired time in HH:MM 24-hour format (e.g. '09:00', '14:30')." }
                 },
                 required: ["patientName", "doctorName", "oldDate"]
             }
@@ -71,10 +71,14 @@ const tools = [
         type: "function",
         function: {
             name: "cancelAppointment",
-            description: "Cancel a confirmed appointment.",
+            description: "Cancel a confirmed appointment. Call this as soon as you have the doctor's name, the patient's name, and the appointment date. Convert any natural language date (e.g. '7th April 2026', 'tomorrow') to YYYY-MM-DD format before calling.",
             parameters: {
                 type: "object",
-                properties: { doctorName: { type: "string" }, patientName: { type: "string" }, date: { type: "string" } },
+                properties: {
+                    doctorName: { type: "string", description: "The doctor's name as known in the system." },
+                    patientName: { type: "string", description: "The patient's full name." },
+                    date: { type: "string", description: "The appointment date in YYYY-MM-DD format." }
+                },
                 required: ["doctorName", "patientName", "date"]
             }
         }
@@ -140,14 +144,35 @@ STRICT BOOKING WORKFLOW (DO NOT SKIP STEPS):
 2. MANDATORY DATE REQUEST: Once the user agrees to a doctor, you MUST ask: "On which date would you like to book the appointment?"
 3. LOCK DATE: DO NOT call 'getAvailableSlots' until the user provides a specific date (e.g., "Tomorrow", "January 26", or "25/01/2026").
 4. SHOW PERIODS: After getting the date, call 'getAvailableSlots' for that specific date and show Morning/Afternoon/Evening options.
-5. PICK SLOT: Show specific times (e.g., 10:00).
-6. GATHER INFO: Get Full Name and Phone.
-7. FINALIZE: Call 'bookAppointment' immediately with all details.
+5. PICK SLOT: Show specific times and wait for the user to clearly pick one. If the user sends an incomplete message (e.g., "book an appointment on" without a time), ask them to specify the time. Do NOT move to the next step until a specific time slot is confirmed.
+6. GATHER INFO (ONE AT A TIME): First ask: "May I have your full name for the booking?" Wait for the name. Then ask: "And your phone number, please?" Wait for the phone number. Do NOT ask for both in the same message. Do NOT guess or extract the name from unrelated sentences.
+7. CONFIRM BEFORE BOOKING: Before calling the tool, summarize ALL details clearly and ask for confirmation. Say exactly: "Let me confirm your booking: Doctor: [name], Date: [date], Time: [time], Patient Name: [name], Phone: [phone]. Shall I go ahead and confirm this appointment?" Do NOT call 'bookAppointment' until the user says yes, confirm, proceed, or similar affirmation.
+8. FINALIZE: Only after the user explicitly confirms, call 'bookAppointment' with all the verified details.
+
+CANCELLATION WORKFLOW (DO NOT SKIP STEPS):
+1. IDENTIFY INTENT: When a user says they want to cancel, ask for: Doctor name, Patient name, and Date of the appointment.
+2. COLLECT ALL THREE: Do not proceed until you have all three details.
+3. CONVERT DATE: Convert any natural date like "7th April 2026", "tomorrow", "next Monday" into YYYY-MM-DD format.
+4. EXECUTE IMMEDIATELY: Once you have doctorName, patientName, and date in YYYY-MM-DD, call the 'cancelAppointment' tool right away. Do NOT say you lack the tools. Do NOT ask for confirmation again.
+5. REPORT RESULT: Tell the user whether the cancellation succeeded or failed based on the tool response.
+
+RESCHEDULING WORKFLOW (DO NOT SKIP STEPS):
+1. IDENTIFY INTENT: When a user says they want to reschedule, ask for: Doctor name, Patient name, Old appointment date, New date, and New time.
+2. COLLECT ALL FIVE: Do not call the tool until you have all five details. If the user provides some but not all, ask only for the missing ones.
+3. CONVERT FORMATS: Convert ALL dates to YYYY-MM-DD format. Convert ALL times to HH:MM 24-hour format. Examples: "9 AM" = "09:00", "2:30 PM" = "14:30", "morning 10" = "10:00", "3 o'clock" = "15:00".
+4. EXECUTE IMMEDIATELY: Once you have patientName, doctorName, oldDate, newDate, and newTime all in the correct format, call the 'rescheduleAppointment' tool right away. Do NOT say you lack tools.
+5. REPORT RESULT: Tell the user whether the reschedule succeeded or failed based on the tool response. Include the new date and time in the confirmation.
 
 RULES:
 - NEVER assume a date. Always ask the user first.
-- Convert natural dates like "tomorrow" to YYYY-MM-DD before calling tools.
-- NO ASTERISKS (**). Plain text only. Friendly and professional.`
+- Convert natural dates like "tomorrow" or "7th April 2026" to YYYY-MM-DD before calling ANY tool.
+- Convert times like "9 AM", "2:30 PM", "morning 10 o'clock" to HH:MM 24-hour format before calling ANY tool.
+- If the user provides a date that is in the past (before today ${todayStr}), do NOT say you lack tools or cannot help. Simply tell them: "That date has already passed. Could you please provide a future date?" and continue the workflow.
+- NO ASTERISKS (**). Plain text only. Friendly and professional.
+- When you have all required parameters for a tool, CALL IT IMMEDIATELY. Never say you cannot help.
+- NEVER guess or assume the patient's name or phone number. Only use what the user explicitly provides in response to your direct question.
+- If the user provides partial or unclear information, ask a clarifying follow-up question instead of guessing.
+- REMEMBER WHAT THE USER ALREADY TOLD YOU. If the user provides multiple details in one message (e.g., doctor name + date) and one part is invalid (e.g., past date or wrong doctor name), acknowledge and keep the valid parts. Only ask them to correct what was wrong. Never re-ask for information the user has already provided correctly earlier in the conversation.`
             },
             ...history.map(item => ({
                 role: item.role === 'model' ? 'assistant' : 'user',

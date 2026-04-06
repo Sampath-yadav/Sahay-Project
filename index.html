@@ -70,7 +70,7 @@
 <body>
     <div id="root"></div>
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useCallback } = React;
 
         function App() {
             const [history, setHistory] = useState([
@@ -78,13 +78,35 @@
             ]);
             const [status, setStatus] = useState('idle'); // idle, listening, thinking, speaking
             const [inputText, setInputText] = useState('');
+            // ──────────────────────────────────────────────
+            // FIX: Track live interim transcript separately
+            // so the input field shows words as user speaks
+            // ──────────────────────────────────────────────
+            const [interimText, setInterimText] = useState('');
 
             const chatEndRef = useRef(null);
             const recognitionRef = useRef(null);
             const audioPlayerRef = useRef(new Audio());
             const timeoutRef = useRef(null);
+            // FIX: Track status in a ref so callbacks always see current value
+            const statusRef = useRef('idle');
+
+            // Keep statusRef in sync with status state
+            useEffect(() => { statusRef.current = status; }, [status]);
 
             useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
+
+            // ──────────────────────────────────────────────
+            // FIX: Pre-warm SpeechRecognition on mount
+            // Creates the instance once so mic click doesn't
+            // pay the 500-1500ms cold-start penalty every time.
+            // ──────────────────────────────────────────────
+            useEffect(() => {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (SpeechRecognition) {
+                    recognitionRef.current = new SpeechRecognition();
+                }
+            }, []);
 
             const playVoice = async (text) => {
                 try {
@@ -135,8 +157,11 @@
                 // 1. Cancel any active audio or existing recognition
                 audioPlayerRef.current.pause();
                 audioPlayerRef.current.currentTime = 0;
-                if (recognitionRef.current) recognitionRef.current.stop();
+                if (recognitionRef.current) {
+                    try { recognitionRef.current.stop(); } catch (e) { /* already stopped */ }
+                }
                 clearTimeout(timeoutRef.current);
+                setInterimText('');
 
                 // 2. Initialize Speech Recognition
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -145,19 +170,33 @@
                     return;
                 }
 
-                const rec = new SpeechRecognition();
+                // ──────────────────────────────────────────────
+                // FIX: Re-use existing instance or create fresh
+                // Avoids cold-start on subsequent clicks.
+                // ──────────────────────────────────────────────
+                const rec = recognitionRef.current || new SpeechRecognition();
                 rec.lang = 'en-US';
-                rec.continuous = false; // Automatically stops after silence (roughly 600-800ms)
-                rec.interimResults = false;
+                rec.continuous = false;
+                // ──────────────────────────────────────────────
+                // FIX: Enable interim results
+                // Old: rec.interimResults = false
+                //   → User sees nothing until full sentence processed
+                // New: rec.interimResults = true
+                //   → Words appear in input field as user speaks
+                //   → Eliminates perceived "is it working?" delay
+                // ──────────────────────────────────────────────
+                rec.interimResults = true;
 
                 rec.onstart = () => {
                     setStatus('listening');
-                    // 3. Set 3-second timeout if no audio is detected at all
+                    setInterimText('');
+                    // 3. Set timeout if no audio detected at all
                     timeoutRef.current = setTimeout(() => {
                         rec.stop();
-                        if (status === 'listening') {
+                        if (statusRef.current === 'listening') {
                             setStatus('idle');
-                            setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn’t catch that, please repeat." }] }]);
+                            setInterimText('');
+                            setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn't catch that, please repeat." }] }]);
                         }
                     }, 3500);
                 };
@@ -166,10 +205,34 @@
                     clearTimeout(timeoutRef.current); // Detected voice, cancel the initial timeout
                 };
 
+                // ──────────────────────────────────────────────
+                // FIX: Handle both interim and final results
+                // Old: only processed final result (e.results[0][0])
+                // New: interim results update the input field live,
+                //      final result triggers the AI call.
+                // ──────────────────────────────────────────────
                 rec.onresult = (e) => {
-                    const text = e.results[0][0].transcript;
-                    if (text.trim()) {
-                        const newHistory = [...history, { role: 'user', parts: [{ text }] }];
+                    let finalTranscript = '';
+                    let interimTranscript = '';
+
+                    for (let i = 0; i < e.results.length; i++) {
+                        const result = e.results[i];
+                        if (result.isFinal) {
+                            finalTranscript += result[0].transcript;
+                        } else {
+                            interimTranscript += result[0].transcript;
+                        }
+                    }
+
+                    // Show interim words in real-time in the input field
+                    if (interimTranscript) {
+                        setInterimText(interimTranscript);
+                    }
+
+                    // When we have the final transcript, send it
+                    if (finalTranscript.trim()) {
+                        setInterimText('');
+                        const newHistory = [...history, { role: 'user', parts: [{ text: finalTranscript.trim() }] }];
                         setHistory(newHistory);
                         getAiReply(newHistory);
                     }
@@ -177,15 +240,17 @@
 
                 rec.onerror = (event) => {
                     console.error("Speech Error:", event.error);
+                    setInterimText('');
                     if (event.error === 'no-speech') {
-                        setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn’t catch that, please repeat." }] }]);
+                        setHistory(prev => [...prev, { role: 'model', parts: [{ text: "I didn't catch that, please repeat." }] }]);
                     }
                     setStatus('idle');
                 };
 
                 rec.onend = () => {
+                    setInterimText('');
                     // Ensure state clears if not already processing AI response
-                    if (status === 'listening') setStatus('idle');
+                    if (statusRef.current === 'listening') setStatus('idle');
                 };
 
                 recognitionRef.current = rec;
@@ -219,8 +284,8 @@
                             {history.map((turn, i) => (
                                 <div key={i} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                     <div className={`p-4 rounded-2xl max-w-[85%] text-sm leading-relaxed shadow-sm ${turn.role === 'user'
-                                            ? 'bg-blue-600 text-white rounded-tr-none'
-                                            : 'bg-white text-slate-800 border border-slate-100 rounded-tl-none'
+                                        ? 'bg-blue-600 text-white rounded-tr-none'
+                                        : 'bg-white text-slate-800 border border-slate-100 rounded-tl-none'
                                         }`}>
                                         <p>{turn.parts[0].text}</p>
                                     </div>
@@ -246,8 +311,8 @@
                                     type="button"
                                     onClick={startMic}
                                     className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${status === 'listening'
-                                            ? 'bg-red-500 text-white mic-active'
-                                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                        ? 'bg-red-500 text-white mic-active'
+                                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                                         }`}
                                     disabled={status === 'thinking'}
                                 >
@@ -256,11 +321,17 @@
 
                                 <input
                                     type="text"
-                                    value={inputText}
+                                    // ──────────────────────────────────────────────
+                                    // FIX: Show interim transcript in the input field
+                                    // When listening, the field shows live words as
+                                    // the user speaks. When idle, shows typed text.
+                                    // ──────────────────────────────────────────────
+                                    value={status === 'listening' ? interimText : inputText}
                                     onChange={(e) => setInputText(e.target.value)}
-                                    placeholder={status === 'listening' ? "Listening to your voice..." : "Type your message here..."}
+                                    placeholder={status === 'listening' ? (interimText ? '' : "Listening to your voice...") : "Type your message here..."}
                                     className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-sm transition-all"
                                     disabled={status !== 'idle'}
+                                    readOnly={status === 'listening'}
                                 />
 
                                 <button

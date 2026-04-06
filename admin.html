@@ -38,24 +38,37 @@
                 <div class="bg-blue-50 p-6 rounded-2xl border border-blue-100 transition hover:shadow-md">
                     <p class="text-xs text-blue-600 font-bold uppercase tracking-wider mb-1">Total Appointments</p>
                     <p id="kpi-total" class="text-4xl font-black text-blue-900">0</p>
+                    <!-- FIX: Show global count when viewing filtered data -->
+                    <p id="kpi-total-global" class="text-xs text-blue-400 mt-1 hidden"></p>
                 </div>
                 <div class="bg-emerald-50 p-6 rounded-2xl border border-emerald-100 transition hover:shadow-md">
                     <p class="text-xs text-emerald-600 font-bold uppercase tracking-wider mb-1">Confirmed</p>
                     <p id="kpi-confirmed" class="text-4xl font-black text-emerald-900">0</p>
+                    <p id="kpi-confirmed-global" class="text-xs text-emerald-400 mt-1 hidden"></p>
                 </div>
                 <div class="bg-rose-50 p-6 rounded-2xl border border-rose-100 transition hover:shadow-md">
                     <p class="text-xs text-rose-600 font-bold uppercase tracking-wider mb-1">Cancelled</p>
                     <p id="kpi-cancelled" class="text-4xl font-black text-rose-900">0</p>
+                    <p id="kpi-cancelled-global" class="text-xs text-rose-400 mt-1 hidden"></p>
                 </div>
             </div>
 
             <!-- Requirement: Filtering System -->
+            <!-- FIX: Added patient search + All Dates toggle -->
             <div id="filter-container"
-                class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 p-6 bg-slate-50 rounded-2xl border border-slate-100">
+                class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8 p-6 bg-slate-50 rounded-2xl border border-slate-100">
                 <div>
                     <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Filter by Date</label>
-                    <input type="date" id="date-filter"
-                        class="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm">
+                    <div class="flex gap-2">
+                        <input type="date" id="date-filter"
+                            class="flex-1 p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm">
+                    </div>
+                    <!-- FIX: All Dates toggle -->
+                    <label class="flex items-center gap-2 mt-2 cursor-pointer">
+                        <input type="checkbox" id="all-dates-toggle"
+                            class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                        <span class="text-xs text-slate-500 font-medium">Show all dates</span>
+                    </label>
                 </div>
                 <div>
                     <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Specialty</label>
@@ -73,6 +86,12 @@
                         <option value="cancelled">Cancelled</option>
                     </select>
                 </div>
+                <!-- FIX: Patient name search -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Patient Search</label>
+                    <input type="text" id="patient-search" placeholder="Search by name..."
+                        class="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm text-sm">
+                </div>
                 <div class="flex items-end">
                     <button id="clear-filters-btn"
                         class="w-full bg-slate-200 text-slate-700 font-bold px-4 py-3 rounded-xl hover:bg-slate-300 transition shadow-sm">
@@ -87,7 +106,17 @@
                 <p class="text-slate-500 font-medium">Fetching clinical data...</p>
             </div>
             <div id="error" class="hidden bg-rose-50 border border-rose-200 text-rose-700 px-6 py-4 rounded-2xl mb-6">
-                <strong class="font-bold">Error:</strong> <span id="error-message"></span></div>
+                <strong class="font-bold">Error:</strong> <span id="error-message"></span>
+            </div>
+
+            <!-- FIX: Row count indicator -->
+            <div id="row-count" class="hidden flex justify-between items-center mb-3 px-2">
+                <p class="text-xs text-slate-400 font-medium"><span id="row-count-num">0</span> appointments shown</p>
+                <!-- FIX: Inline loading indicator for date changes (not full-page) -->
+                <p id="inline-loader" class="text-xs text-blue-400 font-medium hidden">
+                    <i class="fas fa-circle-notch fa-spin mr-1"></i> Updating...
+                </p>
+            </div>
 
             <!-- Requirement: Data Grid Implementation -->
             <div id="table-container"
@@ -127,11 +156,23 @@
         const kpiTotal = document.getElementById('kpi-total');
         const kpiConfirmed = document.getElementById('kpi-confirmed');
         const kpiCancelled = document.getElementById('kpi-cancelled');
+        // FIX: New element references
+        const kpiTotalGlobal = document.getElementById('kpi-total-global');
+        const kpiConfirmedGlobal = document.getElementById('kpi-confirmed-global');
+        const kpiCancelledGlobal = document.getElementById('kpi-cancelled-global');
+        const allDatesToggle = document.getElementById('all-dates-toggle');
+        const patientSearch = document.getElementById('patient-search');
+        const rowCountDiv = document.getElementById('row-count');
+        const rowCountNum = document.getElementById('row-count-num');
+        const inlineLoader = document.getElementById('inline-loader');
 
         let allAppointments = [];
+        // FIX: Cache global counts so KPIs can show "X of Y total"
+        let globalCounts = { total: 0, confirmed: 0, cancelled: 0 };
+
         const getTodayDateString = () => new Date().toLocaleDateString('en-CA');
 
-        // Requirement: Status Badge color-coding
+        // Requirement: Status Badge color-coding (unchanged)
         function renderTable(data) {
             tbody.innerHTML = '';
             if (data.length === 0) {
@@ -167,50 +208,125 @@
                     tbody.appendChild(row);
                 });
             }
+            // FIX: Update row count
+            rowCountNum.textContent = data.length;
         }
 
         function updateKpis(data) {
             kpiTotal.textContent = data.length;
             kpiConfirmed.textContent = data.filter(a => a.status === 'confirmed').length;
             kpiCancelled.textContent = data.filter(a => a.status === 'cancelled').length;
+
+            // ──────────────────────────────────────────────
+            // FIX: Show global counts when viewing filtered data
+            // If the user is viewing a specific date, show
+            // "out of X total" so they know the full picture.
+            // ──────────────────────────────────────────────
+            const isFiltered = !allDatesToggle.checked;
+            if (isFiltered && globalCounts.total > 0) {
+                kpiTotalGlobal.textContent = `out of ${globalCounts.total} total`;
+                kpiConfirmedGlobal.textContent = `out of ${globalCounts.confirmed} total`;
+                kpiCancelledGlobal.textContent = `out of ${globalCounts.cancelled} total`;
+                kpiTotalGlobal.classList.remove('hidden');
+                kpiConfirmedGlobal.classList.remove('hidden');
+                kpiCancelledGlobal.classList.remove('hidden');
+            } else {
+                kpiTotalGlobal.classList.add('hidden');
+                kpiConfirmedGlobal.classList.add('hidden');
+                kpiCancelledGlobal.classList.add('hidden');
+            }
         }
 
+        // ──────────────────────────────────────────────
+        // FIX: Enhanced applyFilters — includes patient search
+        // ──────────────────────────────────────────────
         function applyFilters() {
             const specialty = specialtyFilter.value;
             const status = statusFilter.value;
+            const searchTerm = patientSearch.value.trim().toLowerCase();
+
             let filtered = [...allAppointments];
             if (specialty) filtered = filtered.filter(a => a.doctors?.specialty === specialty);
             if (status) filtered = filtered.filter(a => a.status === status);
+            if (searchTerm) {
+                filtered = filtered.filter(a =>
+                    a.patient_name.toLowerCase().includes(searchTerm) ||
+                    (a.phone && a.phone.includes(searchTerm)) ||
+                    (a.doctors?.name && a.doctors.name.toLowerCase().includes(searchTerm))
+                );
+            }
+
             renderTable(filtered);
+            updateKpis(filtered);
         }
 
         async function fetchData(dateString) {
-            // Only show the full-page loader if no data is currently visible
+            // ──────────────────────────────────────────────
+            // FIX: Show inline loader on subsequent fetches
+            // instead of showing nothing (stale data visible).
+            // Full-page loader only on first load.
+            // ──────────────────────────────────────────────
             if (allAppointments.length === 0) {
                 loadingDiv.classList.remove('hidden');
                 tableContainer.classList.add('hidden');
+                rowCountDiv.classList.add('hidden');
+            } else {
+                inlineLoader.classList.remove('hidden');
             }
             errorDiv.classList.add('hidden');
+
             try {
-                const { data, error } = await supabaseClient
+                let query = supabaseClient
                     .from('appointments')
                     .select(`patient_name, phone, appointment_date, appointment_time, status, doctors ( name, specialty )`)
-                    .eq('appointment_date', dateString)
                     .order('appointment_time', { ascending: true });
+
+                // ──────────────────────────────────────────────
+                // FIX: Only filter by date if "All Dates" is not checked
+                // ──────────────────────────────────────────────
+                if (dateString && !allDatesToggle.checked) {
+                    query = query.eq('appointment_date', dateString);
+                } else {
+                    // When showing all dates, also sort by date
+                    query = query.order('appointment_date', { ascending: false });
+                }
+
+                const { data, error } = await query;
                 if (error) throw error;
+
                 allAppointments = data;
-                updateKpis(data);
                 applyFilters();
                 loadingDiv.classList.add('hidden');
+                inlineLoader.classList.add('hidden');
                 tableContainer.classList.remove('hidden');
+                rowCountDiv.classList.remove('hidden');
             } catch (err) {
                 errorMessageSpan.textContent = err.message;
                 loadingDiv.classList.add('hidden');
+                inlineLoader.classList.add('hidden');
                 errorDiv.classList.remove('hidden');
             }
         }
 
-        // Real-time Update Listener
+        // ──────────────────────────────────────────────
+        // FIX: Fetch global counts once for KPI context
+        // Runs on init and on real-time updates.
+        // ──────────────────────────────────────────────
+        async function fetchGlobalCounts() {
+            try {
+                const { data, error } = await supabaseClient
+                    .from('appointments')
+                    .select('status');
+                if (error) throw error;
+                globalCounts.total = data.length;
+                globalCounts.confirmed = data.filter(a => a.status === 'confirmed').length;
+                globalCounts.cancelled = data.filter(a => a.status === 'cancelled').length;
+            } catch (e) {
+                console.error('Global count fetch failed:', e.message);
+            }
+        }
+
+        // Real-time Update Listener (unchanged structure)
         function setupRealtime() {
             supabaseClient
                 .channel('schema-db-changes')
@@ -223,7 +339,8 @@
                     },
                     (payload) => {
                         console.log('Database Change Detected:', payload);
-                        // Silently refresh the current date view
+                        // Silently refresh the current view + global counts
+                        fetchGlobalCounts();
                         fetchData(dateFilter.value);
                     }
                 )
@@ -246,14 +363,45 @@
             dateFilter.addEventListener('change', () => fetchData(dateFilter.value));
             specialtyFilter.addEventListener('change', applyFilters);
             statusFilter.addEventListener('change', applyFilters);
+
+            // FIX: Patient search — debounced for performance
+            let searchTimeout;
+            patientSearch.addEventListener('input', () => {
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(applyFilters, 250);
+            });
+
+            // ──────────────────────────────────────────────
+            // FIX: All Dates toggle
+            // When checked: disables date picker, fetches all
+            // When unchecked: re-enables date picker, fetches by date
+            // ──────────────────────────────────────────────
+            allDatesToggle.addEventListener('change', () => {
+                dateFilter.disabled = allDatesToggle.checked;
+                if (allDatesToggle.checked) {
+                    dateFilter.classList.add('opacity-50');
+                } else {
+                    dateFilter.classList.remove('opacity-50');
+                }
+                fetchData(dateFilter.value);
+            });
+
             clearFiltersBtn.addEventListener('click', () => {
-                specialtyFilter.value = ""; statusFilter.value = ""; applyFilters();
+                specialtyFilter.value = "";
+                statusFilter.value = "";
+                patientSearch.value = "";
+                allDatesToggle.checked = false;
+                dateFilter.disabled = false;
+                dateFilter.classList.remove('opacity-50');
+                dateFilter.value = getTodayDateString();
+                fetchData(getTodayDateString());
             });
 
             dateFilter.value = getTodayDateString();
             populateSpecialties();
+            fetchGlobalCounts();
             fetchData(getTodayDateString());
-            setupRealtime(); // Start listening for live changes
+            setupRealtime();
         }
 
         async function start() {

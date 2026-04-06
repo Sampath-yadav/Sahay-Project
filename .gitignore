@@ -8,3 +8,4 @@ dist/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+deno.lock

@@ -10,7 +10,21 @@ const headers = {
 
 /**
  * SMART DATE NORMALIZATION
- * Converts "23/01/26", "23/01/2026", "tomorrow", or ISO dates to YYYY-MM-DD
+ * ──────────────────────────────────────────────
+ * FIX: Expanded to handle natural language dates that the LLM
+ * might pass if it doesn't convert to ISO before calling.
+ * 
+ * Now handles:
+ *   - "tomorrow"
+ *   - "today"  
+ *   - "2026-04-07"          (ISO — already worked)
+ *   - "07/04/2026"          (DD/MM/YYYY — already worked)
+ *   - "07/04/26"            (DD/MM/YY — already worked)
+ *   - "7th April 2026"      (NEW — natural language)
+ *   - "April 7, 2026"       (NEW — US format)
+ *   - "7 April 2026"        (NEW — no ordinal)
+ *   - "7th april"           (NEW — no year, assumes current year)
+ * ──────────────────────────────────────────────
  */
 const normalizeDate = (dateStr: string): { valid: boolean; date?: string; error?: string } => {
     if (!dateStr) return { valid: false, error: 'Date is required.' };
@@ -18,12 +32,19 @@ const normalizeDate = (dateStr: string): { valid: boolean; date?: string; error?
     let d = dateStr.trim().toLowerCase();
     const today = new Date();
 
+    // Handle "tomorrow"
     if (d === 'tomorrow') {
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
         return { valid: true, date: tomorrow.toLocaleDateString('en-CA') };
     }
 
+    // Handle "today"
+    if (d === 'today') {
+        return { valid: true, date: today.toLocaleDateString('en-CA') };
+    }
+
+    // Handle DD/MM/YYYY or DD/MM/YY (existing logic, unchanged)
     if (d.includes('/')) {
         const parts = d.split('/');
         if (parts.length === 3) {
@@ -36,11 +57,36 @@ const normalizeDate = (dateStr: string): { valid: boolean; date?: string; error?
         }
     }
 
+    // Handle YYYY-MM-DD (existing logic, unchanged)
     if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
         if (!isNaN(Date.parse(d))) return { valid: true, date: d };
     }
 
-    return { valid: false, error: 'Please use DD/MM/YYYY format.' };
+    // ──────────────────────────────────────────────
+    // NEW: Handle natural language dates
+    // Covers: "7th April 2026", "7 April 2026", "April 7, 2026",
+    //         "7th april", "april 7" (no year → current year)
+    // 
+    // Strategy: strip ordinal suffixes (st/nd/rd/th), then let
+    // JavaScript's Date.parse() handle the rest. If it produces
+    // a valid date, format it as YYYY-MM-DD.
+    // ──────────────────────────────────────────────
+    const cleaned = d
+        .replace(/(\d+)(st|nd|rd|th)/g, '$1')  // "7th" → "7"
+        .replace(/,/g, '')                       // "April 7, 2026" → "April 7 2026"
+        .trim();
+
+    const parsed = new Date(cleaned);
+    if (!isNaN(parsed.getTime())) {
+        // Date.parse with no year defaults to 2001 on some engines.
+        // If the parsed year is far in the past, assume current year.
+        if (parsed.getFullYear() < today.getFullYear()) {
+            parsed.setFullYear(today.getFullYear());
+        }
+        return { valid: true, date: parsed.toLocaleDateString('en-CA') };
+    }
+
+    return { valid: false, error: 'Could not understand the date. Please use a format like DD/MM/YYYY or "7 April 2026".' };
 };
 
 export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> => {

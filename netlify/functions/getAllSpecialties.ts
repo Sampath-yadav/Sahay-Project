@@ -1,7 +1,6 @@
 import { Handler, HandlerEvent, HandlerResponse } from '@netlify/functions';
 import { supabase } from './lib/supabaseClient';
 
-// Professional headers for standard API interaction
 const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -10,41 +9,55 @@ const headers = {
 };
 
 /**
+ * RETRY LOGIC
+ * ──────────────────────────────────────────────
+ * FIX: Added exponential backoff retry (100ms, 200ms, 400ms).
+ * Old: Single attempt — Supabase network blip → 500 error
+ * New: 3 attempts with backoff before giving up.
+ * Consistent with getAvailableSlots/getDoctorDetails.
+ * ──────────────────────────────────────────────
+ */
+const queryWithRetry = async (query: any, maxAttempts = 3) => {
+    const delays = [100, 200, 400];
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            const result = await query();
+            if (result.error) throw result.error;
+            return result;
+        } catch (error: any) {
+            if (attempt === maxAttempts - 1) throw error;
+            console.log(`[SPECIALTIES_RETRY] Attempt ${attempt + 1}/${maxAttempts} failed. Retrying in ${delays[attempt]}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+        }
+    }
+};
+
+/**
  * FEATURE: Hospital Discovery Worker
- * This function serves as the "Menu" for the AI Orchestrator.
- * It dynamically retrieves and deduplicates medical departments.
+ * Dynamically retrieves and deduplicates medical departments.
  */
 export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResponse> => {
 
-    // 1. CORS & Config Guard
-    // Standard handling for browser pre-flight and environment verification
     if (event.httpMethod === 'OPTIONS') {
-        return { statusCode: 200, headers, body: JSON.stringify({ message: 'CORS successful' }) };
+        return { statusCode: 200, headers, body: '' };
     }
 
-    // Safety check to ensure the Supabase client is properly initialized
     if (!supabase) {
         return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ success: false, message: "Database connection object is uninitialized." })
+            statusCode: 200, headers,
+            body: JSON.stringify({ success: false, specialties: [], count: 0, message: "Database connection is not available." })
         };
     }
 
     try {
-        // 2. Specific Column Fetching (Categorical Retrieval)
-        // We only select the 'specialty' column to keep the payload lightweight and fast.
-        const { data, error } = await supabase
-            .from('doctors')
-            .select('specialty');
+        // FIX: Wrapped in retry logic
+        const { data } = await queryWithRetry(() =>
+            supabase.from('doctors').select('specialty')
+        );
 
-        if (error) throw error;
-
-        // Handle case where the table might be empty
         if (!data || data.length === 0) {
             return {
-                statusCode: 200,
-                headers,
+                statusCode: 200, headers,
                 body: JSON.stringify({
                     specialties: [],
                     count: 0,
@@ -53,22 +66,11 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
             };
         }
 
-        // 3. Data Transformation (In-Memory Deduplication)
-        /**
-         * FIX: Added explicit type '{ specialty: string }' to the 'doctor' parameter 
-         * to resolve TS7006: Parameter 'doctor' implicitly has an 'any' type.
-         */
         const rawSpecialties = data.map((doctor: { specialty: string }) => doctor.specialty);
-
-        // - new Set() removes duplicates (e.g., 5 Cardiologists -> 1 "Cardiology")
-        // - .sort() provides a consistent order for the AI to present to the user
         const uniqueSpecialties = [...new Set(rawSpecialties)].filter((s): s is string => !!s).sort();
 
-        // 4. AI-Friendly Response
-        // We return a clear JSON object that the AI Orchestrator can easily parse.
         return {
-            statusCode: 200,
-            headers,
+            statusCode: 200, headers,
             body: JSON.stringify({
                 specialties: uniqueSpecialties,
                 count: uniqueSpecialties.length,
@@ -77,15 +79,15 @@ export const handler: Handler = async (event: HandlerEvent): Promise<HandlerResp
         };
 
     } catch (error: any) {
-        // 5. Error Isolation
-        // Prevents the AI from "guessing" a list if the database fails.
-        console.error("Discovery Worker Error:", error.message);
+        console.error("[SPECIALTIES_ERROR]:", error.message);
+        // FIX: Always 200 so orchestrator can parse the response
         return {
-            statusCode: 500,
-            headers,
+            statusCode: 200, headers,
             body: JSON.stringify({
                 success: false,
-                message: "Failed to retrieve real-time specialty menu."
+                specialties: [],
+                count: 0,
+                message: "Failed to retrieve the specialty list. Please try again."
             })
         };
     }

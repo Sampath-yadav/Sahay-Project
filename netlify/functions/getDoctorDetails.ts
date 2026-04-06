@@ -1,5 +1,5 @@
 import { Handler } from '@netlify/functions';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from './lib/supabaseClient';
 
 const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -11,6 +11,7 @@ const headers = {
 /**
  * RETRY CONFIGURATION
  * Exponential backoff: 100ms, 200ms, 400ms (3 total attempts)
+ * Preserved from original — proven stable in production.
  */
 const isTransientError = (error: any): boolean => {
     const msg = error?.message?.toLowerCase() || '';
@@ -37,7 +38,6 @@ const queryWithRetry = async (query: any, maxAttempts = 3) => {
             if (attempt === maxAttempts - 1 || !isTransientError(error)) {
                 throw error;
             }
-
             const delayMs = delays[attempt];
             console.log(`[RETRY] Attempt ${attempt + 1}/${maxAttempts} failed. Retrying in ${delayMs}ms...`);
             await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -46,62 +46,56 @@ const queryWithRetry = async (query: any, maxAttempts = 3) => {
 };
 
 /**
- * CLEAN SEARCH STEM
- * Extracts the most reliable part of the name to bypass typos.
+ * CHARACTER-GAP DOCTOR SEARCH
+ * ──────────────────────────────────────────────
+ * FIX: Replaces stem-based search (first 5 chars).
+ * Old: getStem("Dr. A. S. Mahesh") → "A" → matches any doctor
+ * New: Strip Dr/dots/spaces → "ASMahesh" → %A%S%M%a%h%e%s%h%
+ * Consistent with cancel/reschedule/bookAppointment tools.
+ * ──────────────────────────────────────────────
  */
-const getStem = (term: string) => {
-    if (!term) return '';
-    // Remove "Dr.", special characters, and extra spaces
-    const clean = term.replace(/Dr\./gi, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
-    // Take first 4-5 characters to capture the root of the word
-    return clean.length > 4 ? clean.substring(0, 5) : clean;
+const buildSearchPattern = (term: string): string => {
+    if (!term) return '%';
+    const clean = term
+        .replace(/Dr\./gi, '')
+        .replace(/\./g, '')
+        .replace(/\s+/g, '')
+        .trim();
+    if (!clean) return '%';
+    return `%${clean.split('').join('%')}%`;
 };
 
 export const handler: Handler = async (event) => {
     if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
 
     try {
-        // 1. DYNAMIC CONFIGURATION & SANITIZATION
-        const rawUrl = process.env.SUPABASE_URL || '';
-        const supabaseUrl = rawUrl.trim().replace(/\/$/, ""); // REMOVES TRAILING SLASH
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
-
-        if (!supabaseUrl.startsWith('https')) {
-            throw new Error("Missing or invalid SUPABASE_URL configuration.");
-        }
-
-        const supabase = createClient(supabaseUrl, supabaseKey);
-
-        // 2. PARSE REQUEST
         const { specialty, doctorName } = JSON.parse(event.body || '{}');
 
-        /**
-         * SCHEMA ALIGNMENT:
-         * id, name, specialty, working_hours_start, working_hours_end
-         */
         const SELECT_FIELDS = 'id, name, specialty, working_hours_start, working_hours_end';
 
-        console.log(`[SEARCH] Params: specialty=${specialty}, name=${doctorName}`);
+        console.log(`[DOCTOR_SEARCH] Params: specialty=${specialty}, name=${doctorName}`);
 
         let query = supabase.from('doctors').select(SELECT_FIELDS);
 
-        // 3. SMART PATTERN MATCHING (ILIKE)
-        // We use the 'stem' of the word to find matches even with typos like "Cardiolagy" or "Aditya"
+        // ──────────────────────────────────────────────
+        // FIX: Character-gap pattern for name search,
+        // standard ilike for specialty (specialties are
+        // clean single-word values, no initials issue).
+        // ──────────────────────────────────────────────
         if (specialty && doctorName) {
-            const sStem = getStem(specialty);
-            const nStem = getStem(doctorName);
-            query = query.ilike('specialty', `%${sStem}%`).ilike('name', `%${nStem}%`);
+            const namePattern = buildSearchPattern(doctorName);
+            query = query
+                .ilike('specialty', `%${specialty.trim()}%`)
+                .ilike('name', namePattern);
         } else if (specialty) {
-            const stem = getStem(specialty);
-            query = query.ilike('specialty', `%${stem}%`);
+            query = query.ilike('specialty', `%${specialty.trim()}%`);
         } else if (doctorName) {
-            const stem = getStem(doctorName);
-            query = query.ilike('name', `%${stem}%`);
+            const namePattern = buildSearchPattern(doctorName);
+            query = query.ilike('name', namePattern);
         } else {
-            query = query.limit(5); // Default list
+            query = query.limit(5);
         }
 
-        // 4. EXECUTE (with retry)
         let data;
         let error;
 
@@ -115,28 +109,35 @@ export const handler: Handler = async (event) => {
 
         if (error) throw error;
 
-        // 5. SECOND-TIER FALLBACK (Broad Search with Retry)
-        // If the specific search fails, try an even broader search on the first 3 characters
+        // SECOND-TIER FALLBACK: Broader search if no results
         let finalData = data || [];
         if (finalData.length === 0 && (specialty || doctorName)) {
-            const broadStem = (doctorName || specialty || "").trim().substring(0, 3);
-            if (broadStem.length >= 2) {
-                console.log(`[SEARCH] No results. Retrying with broad stem: ${broadStem}`);
+            const fallbackTerm = (doctorName || specialty || '').trim();
+            const broadPattern = buildSearchPattern(fallbackTerm.substring(0, Math.min(fallbackTerm.length, 4)));
+
+            if (fallbackTerm.length >= 2) {
+                console.log(`[DOCTOR_SEARCH] No results. Retrying with broad pattern.`);
                 try {
                     const result = await queryWithRetry(() =>
                         supabase
                             .from('doctors')
                             .select(SELECT_FIELDS)
-                            .or(`name.ilike.%${broadStem}%,specialty.ilike.%${broadStem}%`)
+                            .or(`name.ilike.${broadPattern},specialty.ilike.${broadPattern}`)
                             .limit(3)
                     );
                     finalData = result.data || [];
                 } catch (fallbackError: any) {
-                    console.error('[SEARCH] Fallback search failed:', fallbackError.message);
+                    console.error('[DOCTOR_SEARCH] Fallback failed:', fallbackError.message);
                 }
             }
         }
 
+        // ──────────────────────────────────────────────
+        // FIX: Always return 200 so the orchestrator's
+        // executeTool → response.json() never fails, and
+        // Mistral always gets a parseable tool result.
+        // Old: returned 503/504 for transient errors.
+        // ──────────────────────────────────────────────
         return {
             statusCode: 200,
             headers,
@@ -153,26 +154,14 @@ export const handler: Handler = async (event) => {
     } catch (error: any) {
         console.error("[DOCTOR_SEARCH_CRITICAL]:", error.message);
 
-        // Determine appropriate HTTP status based on error type
-        let statusCode = 500;
-        let errorType = "UNKNOWN_ERROR";
-
-        if (isTransientError(error)) {
-            statusCode = 503; // Service Unavailable
-            errorType = "DATABASE_TEMPORARILY_UNAVAILABLE";
-        } else if (error.message.includes('timeout')) {
-            statusCode = 504; // Gateway Timeout
-            errorType = "REQUEST_TIMEOUT";
-        }
-
-        // Return appropriate status but still include JSON so AI can handle it
+        // FIX: Always 200 — the error message tells the AI what happened
         return {
-            statusCode,
+            statusCode: 200,
             headers,
             body: JSON.stringify({
                 success: false,
-                message: "I'm having a little trouble accessing our doctor directory right now. Could you please double-check the name?",
-                error_type: errorType
+                message: "I'm having a little trouble accessing our doctor directory right now. Could you please try again?",
+                error_type: isTransientError(error) ? "DATABASE_TEMPORARILY_UNAVAILABLE" : "UNKNOWN_ERROR"
             })
         };
     }
