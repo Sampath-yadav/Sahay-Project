@@ -291,6 +291,7 @@
             const statusRef = useRef('idle');
             const callActiveRef = useRef(false);
             const historyRef = useRef(history);
+            const endCallPendingRef = useRef(false);
 
             useEffect(() => { statusRef.current = status; }, [status]);
             useEffect(() => { callActiveRef.current = callActive; }, [callActive]);
@@ -330,7 +331,7 @@
             //   • utterance onerror mid-speech → correctly resume call or set idle
             //   • END pressed during speech → cancel() stops audio immediately (toggleCall)
             // ─────────────────────────────────────────────────────────
-            const playVoice = (text) => {
+            const playVoice = (text, shouldEndCall = false) => {
                 setStatus('speaking');
 
                 // ─────────────────────────────────────────────────────────────────────
@@ -481,11 +482,15 @@
                         // (previously added a period causing an unnatural short pause)
                         // 10. Remaining colons → space
                         .replace(/:/g, ' ')
-                        // NEW-C: Phone numbers → digit-by-digit (7+ digit sequences only)
+                        // NEW-C: Phone numbers → digit-by-digit as WORDS (7+ digit sequences only)
                         // Runs AFTER all date/time/year conversions so 2026 is already words
-                        // "9014386804" → "9 0 1 4 3 8 6 8 0 4"
+                        // "9014386804" → "nine. zero. one. four. three. eight. six. eight. zero. four"
+                        // Full word map eliminates TTS ambiguity; period separator forces clear pause between each digit
                         // Short numbers (age, floor, count) are ≤6 digits — unaffected
-                        .replace(/\b(\d{7,})\b/g, (m) => m.split('').join(' '))
+                        .replace(/\b(\d{7,})\b/g, (m) => {
+                            const DIGIT_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+                            return m.split('').map(d => DIGIT_WORDS[parseInt(d)]).join('. ');
+                        })
                         // 11. American slang → neutral Indian English
                         .replace(/\bGot it\b/gi, 'Understood')
                         .replace(/\bAwesome\b/gi, 'Very good')
@@ -538,12 +543,37 @@
                     utterance.pitch = 1.0;
                     utterance.volume = 1.0;
                     utterance.onend = () => {
-                        if (callActiveRef.current) startMic();
-                        else setStatus('idle');
+                        if (shouldEndCall && callActiveRef.current) {
+                            // Auto-end call after successful booking/cancel/reschedule
+                            callActiveRef.current = false;
+                            setCallActive(false);
+                            clearTimeout(timeoutRef.current);
+                            if (recognitionRef.current) {
+                                try { recognitionRef.current.stop(); } catch (e) { }
+                            }
+                            setInterimText('');
+                            setStatus('idle');
+                        } else if (callActiveRef.current) {
+                            startMic();
+                        } else {
+                            setStatus('idle');
+                        }
                     };
                     utterance.onerror = () => {
-                        if (callActiveRef.current) startMic();
-                        else setStatus('idle');
+                        if (shouldEndCall && callActiveRef.current) {
+                            callActiveRef.current = false;
+                            setCallActive(false);
+                            clearTimeout(timeoutRef.current);
+                            if (recognitionRef.current) {
+                                try { recognitionRef.current.stop(); } catch (e) { }
+                            }
+                            setInterimText('');
+                            setStatus('idle');
+                        } else if (callActiveRef.current) {
+                            startMic();
+                        } else {
+                            setStatus('idle');
+                        }
                     };
                     window.speechSynthesis.speak(utterance);
                 };
@@ -572,9 +602,12 @@
                     });
                     const data = await response.json();
                     const aiReply = data.reply || "I apologize, I couldn't retrieve a response.";
+                    const shouldEndCall = data.endCall === true;
+                    // Persist the end-call signal so it survives across response cycles
+                    if (shouldEndCall) endCallPendingRef.current = true;
                     const updatedHistory = [...currentHistory, { role: 'model', parts: [{ text: aiReply }] }];
                     setHistory(updatedHistory);
-                    playVoice(aiReply);
+                    playVoice(aiReply, shouldEndCall);
                 } catch (error) {
                     console.error("AI Error:", error);
                     if (callActiveRef.current) startMic();
@@ -583,6 +616,20 @@
             };
 
             const startMic = () => {
+                // Auto-end call if a terminal action (book/cancel/reschedule) succeeded
+                if (endCallPendingRef.current && callActiveRef.current) {
+                    endCallPendingRef.current = false;
+                    callActiveRef.current = false;
+                    setCallActive(false);
+                    clearTimeout(timeoutRef.current);
+                    if (recognitionRef.current) {
+                        try { recognitionRef.current.stop(); } catch (e) { }
+                    }
+                    setInterimText('');
+                    setStatus('idle');
+                    return;
+                }
+
                 if (!callActiveRef.current && view === 'voice') {
                     setStatus('idle');
                     return;
@@ -683,6 +730,7 @@
                     setInterimText('');
                     setStatus('idle');
                 } else {
+                    endCallPendingRef.current = false; // Reset on new call
                     callActiveRef.current = true;
                     setCallActive(true);
                     startMic();

@@ -91,13 +91,12 @@ const normalizeTime = (timeInput: string): string | null => {
 /**
  * PHONE VALIDATOR
  * Strips whitespace and non-digit characters (except leading +),
- * then checks for a minimum viable phone number (7+ digits).
+ * then checks for an exact 10-digit mobile number.
  */
 const validatePhone = (phone: string): { valid: boolean; cleaned: string } => {
     if (!phone) return { valid: false, cleaned: '' };
-    const cleaned = phone.trim().replace(/[^\d+]/g, '');
-    const digitCount = cleaned.replace(/\+/g, '').length;
-    return { valid: digitCount >= 7, cleaned };
+    const cleaned = phone.trim().replace(/[^\d]/g, '');
+    return { valid: cleaned.length === 10, cleaned };
 };
 
 export const handler: Handler = async (event) => {
@@ -131,7 +130,7 @@ export const handler: Handler = async (event) => {
                 statusCode: 200, headers,
                 body: JSON.stringify({
                     success: false,
-                    message: `The phone number "${phone}" doesn't look valid. Please provide a number with at least 7 digits.`
+                    message: `The phone number "${phone}" is not valid. Please provide an exact 10-digit mobile number with no spaces or special characters.`
                 })
             };
         }

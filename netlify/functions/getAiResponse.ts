@@ -145,9 +145,13 @@ STRICT BOOKING WORKFLOW (DO NOT SKIP STEPS):
 3. LOCK DATE: DO NOT call 'getAvailableSlots' until the user provides a specific date (e.g., "Tomorrow", "January 26", or "25/01/2026").
 4. SHOW PERIODS: After getting the date, call 'getAvailableSlots' for that specific date and show Morning/Afternoon/Evening options.
 5. PICK SLOT: Show specific times and wait for the user to clearly pick one. If the user sends an incomplete message (e.g., "book an appointment on" without a time), ask them to specify the time. Do NOT move to the next step until a specific time slot is confirmed.
-6. GATHER INFO (ONE AT A TIME): First ask: "May I have your full name for the booking?" Wait for the name. Then ask: "And your phone number, please?" Wait for the phone number. Do NOT ask for both in the same message. Do NOT guess or extract the name from unrelated sentences.
-7. CONFIRM BEFORE BOOKING: Before calling the tool, summarize ALL details clearly and ask for confirmation. Say exactly: "Let me confirm your booking: Doctor: [name], Date: [date], Time: [time], Patient Name: [name], Phone: [phone]. Shall I go ahead and confirm this appointment?" Do NOT call 'bookAppointment' until the user says yes, confirm, proceed, or similar affirmation.
-8. FINALIZE: Only after the user explicitly confirms, call 'bookAppointment' with all the verified details.
+6. GATHER INFO (ONE AT A TIME, WITH CONFIRMATION):
+   a. NAME: Ask: "May I have your full name for the booking?" Wait for the name. Then READ IT BACK: "I have your name as [name]. Is that correct?" If the user says no, wrong, or provides a correction, update the name and confirm again. Only proceed once the user confirms the name is correct.
+   b. PHONE: Ask: "And your 10-digit mobile number, please?" Wait for the phone number. Then READ IT BACK: "I have your number as [number]. Is that correct?" If the user says no, wrong, or provides a correction, update the number and confirm again. Only proceed once the user confirms the number is correct.
+   Do NOT ask for both name and phone in the same message. Do NOT guess or extract the name from unrelated sentences.
+6a. PHONE HANDLING (MANDATORY): When the user provides a phone number, do NOT try to count digits or validate it yourself. Users may say numbers in groups like "63000 81436", "901 438 6804", "9 0 1 4 3 8 6 8 0 4", or as one block "9014386804" — ALL of these are the same valid number. Your job is to: (a) Take ALL the digits from the user's message, (b) Remove ALL spaces, dashes, and separators, (c) Concatenate them into a single continuous string, (d) Pass that cleaned string to the bookAppointment tool. The tool will validate the phone number and tell you if it is invalid. If the tool says it is invalid, relay that message to the user and ask again. NEVER reject a phone number yourself — always let the tool decide.
+7. CONFIRM BEFORE BOOKING: Before calling the tool, summarize ALL details clearly and ask for confirmation. Say exactly: "Let me confirm your booking: Doctor: [name], Date: [date], Time: [time], Patient Name: [name], Phone: [phone]. Shall I go ahead and confirm this appointment?" Do NOT call 'bookAppointment' until the user says yes, confirm, proceed, or similar affirmation. CORRECTION AT SUMMARY: If the user says something like "wrong name", "change phone", "name is wrong", "that's not my name", or "my number is different", ask ONLY for the specific detail that needs correction. Do NOT re-ask for all details. After the user provides the corrected value, read back the updated summary again for confirmation.
+8. FINALIZE: Only after the user explicitly confirms ALL details are correct, call 'bookAppointment' with all the verified details.
 
 CANCELLATION WORKFLOW (DO NOT SKIP STEPS):
 1. IDENTIFY INTENT: When a user says they want to cancel, ask for: Doctor name, Patient name, and Date of the appointment.
@@ -197,10 +201,16 @@ RULES:
         let aiMessage = firstData.choices[0].message;
 
         // Pass 2: Tool Execution
+        let endCall = false;
         if (aiMessage.tool_calls) {
             const toolResults = [];
+            const TERMINAL_TOOLS = ['bookAppointment', 'cancelAppointment', 'rescheduleAppointment'];
             for (const toolCall of aiMessage.tool_calls as ToolCall[]) {
                 const result = await executeTool(toolCall.function.name, JSON.parse(toolCall.function.arguments), host);
+                // Auto-end call when a terminal action succeeds
+                if (TERMINAL_TOOLS.includes(toolCall.function.name) && result?.success) {
+                    endCall = true;
+                }
                 toolResults.push({
                     role: "tool",
                     tool_call_id: toolCall.id,
@@ -226,7 +236,7 @@ RULES:
         return {
             statusCode: 200,
             headers: HEADERS,
-            body: JSON.stringify({ reply: (aiMessage.content || "").replace(/\*\*/g, "").trim() })
+            body: JSON.stringify({ reply: (aiMessage.content || "").replace(/\*\*/g, "").trim(), endCall })
         };
 
     } catch (error: any) {
