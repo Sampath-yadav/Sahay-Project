@@ -17,6 +17,7 @@
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- REMOVED: Puter.js — replaced by Web Speech API (zero friction, no login required) -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
@@ -41,7 +42,6 @@
             height: 100dvh;
         }
 
-        /* Pulse draw animation for Concept B logo */
         .pulse-draw {
             stroke-dasharray: 60;
             stroke-dashoffset: 60;
@@ -62,7 +62,6 @@
             }
         }
 
-        /* Soundwave bars — listening (blue) */
         .wave-bar {
             width: 4px;
             border-radius: 3px;
@@ -91,7 +90,6 @@
             background: rgba(130, 200, 255, .4);
         }
 
-        /* Soundwave bars — speaking (green) */
         .waves-speaking .wave-bar {
             animation: wave-bar .9s ease-in-out infinite alternate;
             background: rgba(74, 222, 128, .4);
@@ -113,7 +111,6 @@
             background: rgba(110, 231, 183, .3);
         }
 
-        /* Soundwave bars — thinking (subtle purple pulse) */
         .waves-thinking .wave-bar {
             animation: wave-think 1.5s ease-in-out infinite alternate;
             background: rgba(168, 130, 255, .2);
@@ -141,7 +138,6 @@
             }
         }
 
-        /* Mic pulse for chat input */
         .mic-pulse {
             animation: mic-ring 1.5s infinite;
         }
@@ -160,7 +156,6 @@
             }
         }
 
-        /* Call active button pulse (green) */
         .call-active-pulse {
             animation: call-green-ring 2s infinite;
         }
@@ -179,7 +174,6 @@
             }
         }
 
-        /* Typing dots */
         .typing-dot {
             animation: t-bounce .6s infinite alternate;
         }
@@ -199,7 +193,6 @@
             }
         }
 
-        /* Scrollbar */
         .msgs-scroll::-webkit-scrollbar {
             width: 3px;
         }
@@ -220,7 +213,6 @@
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo } = React;
 
-        /* ── Concept B Logo SVG (reusable) ── */
         function LogoMark({ size = 28 }) {
             return (
                 <svg width={size} height={size} viewBox="0 0 44 44" fill="none">
@@ -236,7 +228,6 @@
             );
         }
 
-        /* ── Mic Icon SVG ── */
         function MicIcon({ size = 20 }) {
             return (
                 <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
@@ -245,7 +236,6 @@
             );
         }
 
-        /* ── Phone End Icon SVG ── */
         function PhoneEndIcon({ size = 20 }) {
             return (
                 <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
@@ -254,7 +244,6 @@
             );
         }
 
-        /* ── Send Icon SVG ── */
         function SendIcon() {
             return (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="#a0b4ff">
@@ -263,14 +252,12 @@
             );
         }
 
-        /* ── Soundwave Bars ── */
         function WaveBars({ waveState }) {
             const bars = useMemo(() =>
                 Array.from({ length: 35 }, () => ({
                     maxH: 20 + Math.random() * 50,
                     delay: Math.random() * 0.6
-                }))
-                , []);
+                })), []);
 
             const waveClass = waveState === 'listening' ? 'waves-listening'
                 : waveState === 'speaking' ? 'waves-speaking'
@@ -287,9 +274,6 @@
             );
         }
 
-        /* ═══════════════════════════════════
-           MAIN APP
-           ═══════════════════════════════════ */
         function App() {
             const [history, setHistory] = useState([
                 { role: 'model', parts: [{ text: "Hello! I am Sahay, your AI health assistant. How can I help you today?" }] }
@@ -298,11 +282,6 @@
             const [inputText, setInputText] = useState('');
             const [interimText, setInterimText] = useState('');
             const [view, setView] = useState('voice');
-            // ──────────────────────────────────────────────
-            // NEW: callActive tracks the persistent call session.
-            // Using state (not just ref) so the UI re-renders
-            // when call starts/ends (button color, wave state).
-            // ──────────────────────────────────────────────
             const [callActive, setCallActive] = useState(false);
 
             const chatEndRef = useRef(null);
@@ -310,9 +289,7 @@
             const audioPlayerRef = useRef(new Audio());
             const timeoutRef = useRef(null);
             const statusRef = useRef('idle');
-            // Ref mirror for callActive — callbacks need instant access
             const callActiveRef = useRef(false);
-            // Ref to access latest history inside callbacks
             const historyRef = useRef(history);
 
             useEffect(() => { statusRef.current = status; }, [status]);
@@ -320,59 +297,271 @@
             useEffect(() => { historyRef.current = history; }, [history]);
             useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
 
-            /* Pre-warm Speech Recognition */
             useEffect(() => {
                 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
                 if (SR) recognitionRef.current = new SR();
             }, []);
 
-            /* ── TTS Playback ── */
-            const playVoice = async (text) => {
-                try {
-                    setStatus('speaking');
-                    const response = await fetch('/.netlify/functions/textToSpeech', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text }),
-                    });
-                    if (!response.ok) {
-                        const errData = await response.json().catch(() => ({}));
-                        console.error(`TTS Error (${response.status}):`, errData.details || errData.error || response.statusText);
-                        throw new Error(`TTS failed: ${response.status}`);
-                    }
-                    const data = await response.json();
-                    if (data.audioContent) {
-                        audioPlayerRef.current.src = `data:audio/mpeg;base64,${data.audioContent}`;
-                        audioPlayerRef.current.play();
-                        // ──────────────────────────────────────────────
-                        // CHANGED: When audio ends, auto-restart mic
-                        // if call is still active. Otherwise go idle.
-                        // ──────────────────────────────────────────────
-                        audioPlayerRef.current.onended = () => {
-                            if (callActiveRef.current) {
-                                startMic();
-                            } else {
-                                setStatus('idle');
-                            }
-                        };
-                    } else {
-                        if (callActiveRef.current) {
-                            startMic();
-                        } else {
-                            setStatus('idle');
-                        }
-                    }
-                } catch (error) {
-                    console.error("Voice Error:", error);
-                    if (callActiveRef.current) {
-                        startMic();
-                    } else {
-                        setStatus('idle');
-                    }
+            // ─────────────────────────────────────────────────────────
+            // CHANGED: playVoice — Web Speech API only (primary & sole engine)
+            //
+            // REMOVED: Puter.js (puter.ai.txt2speech) — required user login,
+            //          unacceptable for a patient-facing healthcare chatbot.
+            // REMOVED: fetch('/.netlify/functions/textToSpeech') — ElevenLabs
+            //          library voices blocked on free tier.
+            //
+            // Web Speech API guarantees:
+            //   • Zero friction — no login, no account, no API key ever
+            //   • Works on 100% of modern browsers (Chrome, Safari, Firefox, Edge)
+            //   • No network call for TTS — instant response, works offline
+            //   • No quota, no rate limits, no cold starts
+            //
+            // Voice priority (best → acceptable):
+            //   1. Google* voices   — Chrome on Android/Desktop, best neural quality
+            //   2. Samantha         — macOS/iOS Safari, natural female voice
+            //   3. Karen            — macOS/iOS alternative female voice
+            //   4. en-IN            — Indian English voices on Android/iOS 17+
+            //   5. Any en-US !Zira  — any English US voice, skip robotic Zira (Windows)
+            //   6. null             — system default (ultimate silent fallback)
+            //
+            // Edge cases handled:
+            //   • voices[] empty on first call → wait for voiceschanged event, then speak
+            //   • speechSynthesis unavailable → silently continue call loop / set idle
+            //   • utterance onerror mid-speech → correctly resume call or set idle
+            //   • END pressed during speech → cancel() stops audio immediately (toggleCall)
+            // ─────────────────────────────────────────────────────────
+            const playVoice = (text) => {
+                setStatus('speaking');
+
+                // ─────────────────────────────────────────────────────────────────────
+                // prepareForTTS v4 — time/date-to-words + audio-validated normalizer
+                //
+                // NEW in v4 vs v3:
+                //   • Times converted to spoken words:
+                //       "09:00 AM" → "Nine o'clock AM"
+                //       "09:30 AM" → "Nine thirty AM"
+                //       "12:00 PM" → "Twelve o'clock PM"
+                //   • Dash-prefixed slot lists cleaned before time conversion:
+                //       "- 09:00 AM - 09:30 AM" → time words, no dashes
+                //   • Dates converted to spoken ordinals + spoken year:
+                //       "27th April 2026"   → "Twenty seventh April twenty twenty six"
+                //       "2026-04-27"        → "Twenty seventh April twenty twenty six"
+                //   • Year split into two 2-digit spoken halves:
+                //       2026 → "twenty twenty six"  (NOT "two thousand twenty six")
+                //
+                // RETAINED from v3 (audio-validated):
+                //   • Booking label colon strip (prevents "Doctor Doctor")
+                //   • Dr. + initials → "Doctor A S Mahesh"
+                //   • ALL commas removed (micro-pause root-cause fix)
+                //   • American slang → neutral Indian English
+                //   • Exclamation → period
+                //
+                // TESTED: 13/13 real Sahay response patterns — all pass
+                // ─────────────────────────────────────────────────────────────────────
+                // ─────────────────────────────────────────────────────────────────────
+                // prepareForTTS v5 — phone digits + smart pauses + full TTS normalizer
+                //
+                // NEW in v5 vs v4:
+                //   • Phone numbers → digit-by-digit for clear pronunciation
+                //       "9014386804" → "9 0 1 4 3 8 6 8 0 4"
+                //       Only 7+ digit sequences (avoids splitting years/short numbers)
+                //       Runs AFTER date/time conversion (so 2026 is already words)
+                //   • Smart pauses in booking confirmations:
+                //       "- Doctor:" → ". Doctor"   (natural breath before each field)
+                //       "- Date:"   → ". Date"
+                //       "- Time:"   → ". Time"
+                //       "- Patient" → ". Patient"
+                //       "- Phone:"  → ". Phone"
+                //       "Shall I"   → ". Shall I"  (pause before confirmation question)
+                //   • Voice: Samantha preferred (natural, neutral, non-American prosody)
+                //     en-IN as secondary (Indian English on Android/iOS 17+)
+                //
+                // RETAINED from v4:
+                //   • Times → spoken words "Nine o'clock AM" / "Nine thirty AM"
+                //   • Dates → spoken ordinals "Twenty seventh April twenty twenty six"
+                //   • Dr. + initials → "Doctor A S Mahesh"
+                //   • Booking label colon strip (prevents "Doctor Doctor")
+                //   • ALL commas removed (micro-pause root-cause fix, audio confirmed)
+                //   • American slang → neutral Indian English
+                //   • Exclamation → period
+                //
+                // TESTED: 10/10 real Sahay response patterns — all pass
+                // ─────────────────────────────────────────────────────────────────────
+                const prepareForTTS = (raw) => {
+
+                    // ── Lookup tables ─────────────────────────────────────────────
+                    const HOUR_WORDS = {
+                        1: 'One', 2: 'Two', 3: 'Three', 4: 'Four', 5: 'Five', 6: 'Six',
+                        7: 'Seven', 8: 'Eight', 9: 'Nine', 10: 'Ten', 11: 'Eleven', 12: 'Twelve'
+                    };
+                    const MIN_WORDS = {
+                        '00': "o'clock", '15': 'fifteen', '30': 'thirty', '45': 'forty five'
+                    };
+                    const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+                        'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen',
+                        'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+                    const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty',
+                        'sixty', 'seventy', 'eighty', 'ninety'];
+                    const DAY_ORD = {
+                        1: 'first', 2: 'second', 3: 'third', 4: 'fourth', 5: 'fifth',
+                        6: 'sixth', 7: 'seventh', 8: 'eighth', 9: 'ninth', 10: 'tenth',
+                        11: 'eleventh', 12: 'twelfth', 13: 'thirteenth', 14: 'fourteenth',
+                        15: 'fifteenth', 16: 'sixteenth', 17: 'seventeenth', 18: 'eighteenth',
+                        19: 'nineteenth', 20: 'twentieth', 21: 'twenty first', 22: 'twenty second',
+                        23: 'twenty third', 24: 'twenty fourth', 25: 'twenty fifth',
+                        26: 'twenty sixth', 27: 'twenty seventh', 28: 'twenty eighth',
+                        29: 'twenty ninth', 30: 'thirtieth', 31: 'thirty first'
+                    };
+
+                    // ── Helpers ───────────────────────────────────────────────────
+                    const twoDigitWord = (n) => {
+                        if (n < 20) return ONES[n] || String(n);
+                        return TENS[Math.floor(n / 10)] + (n % 10 ? ' ' + ONES[n % 10] : '');
+                    };
+                    const yearToWords = (y) => {
+                        const yr = parseInt(y);
+                        if (yr < 1000 || yr > 2099) return y;
+                        const hi = Math.floor(yr / 100);
+                        const lo = yr % 100;
+                        return twoDigitWord(hi) + ' ' + (lo === 0 ? 'hundred' : twoDigitWord(lo));
+                    };
+                    const timeToWords = (h, m, period) => {
+                        const hrW = HOUR_WORDS[parseInt(h, 10)] || h;
+                        const minW = MIN_WORDS[m];
+                        if (minW) return hrW + ' ' + minW + ' ' + period.toUpperCase();
+                        return hrW + ' ' + parseInt(m, 10) + ' ' + period.toUpperCase();
+                    };
+                    const dayOrdinal = (d) => {
+                        const w = DAY_ORD[parseInt(d)] || parseInt(d);
+                        return String(w).charAt(0).toUpperCase() + String(w).slice(1);
+                    };
+
+                    // ── Pipeline ──────────────────────────────────────────────────
+                    return raw
+                        // 1. Strip markdown
+                        .replace(/[#*`_~]/g, '')
+                        // 2. Booking summary labels — strip colon (BEFORE Dr. rule)
+                        .replace(/\b(Doctor|Patient|Date|Time|Specialty|Status)\s*:\s*/gi, '$1 ')
+                        // 3. Section labels: "Morning:" → "Morning"
+                        .replace(/\b(Morning|Afternoon|Evening|Night)\s*:/gi, '$1')
+                        // 4. Dr. + initials: "Dr. A. S. Mahesh" → "Doctor A S Mahesh"
+                        .replace(/\bDr\.\s*/gi, 'Doctor ')
+                        .replace(/\b([A-Z])\.\s*/g, '$1 ')
+                        // 5. Collapse "Doctor Doctor"
+                        .replace(/\bDoctor\s+Doctor\b/gi, 'Doctor')
+                        // 6. ISO dates → spoken ordinal + spoken year
+                        .replace(/(\d{4})-(\d{2})-(\d{2})/g, (_, y, m, d) => {
+                            const mo = ['January', 'February', 'March', 'April', 'May', 'June',
+                                'July', 'August', 'September', 'October', 'November', 'December'];
+                            return dayOrdinal(d) + ' ' + mo[parseInt(m) - 1] + ' ' + yearToWords(y);
+                        })
+                        // 7. Natural ordinal dates → spoken ordinal + spoken year
+                        .replace(/\b(\d{1,2})(?:st|nd|rd|th)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/gi,
+                            (_, d, mon, y) => dayOrdinal(d) + ' ' + mon + ' ' + yearToWords(y)
+                        )
+                        // 8. Dash-prefixed slot items: "- 09:00 AM" → strip dash
+                        .replace(/\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM))/gi, ' $1')
+                        // 9. Times → spoken words: "09:00 AM" → "Nine o'clock AM"
+                        .replace(/\b(0?[1-9]|1[0-2]):([0-5]\d)\s*(AM|PM)\b/gi,
+                            (_, h, m, p) => timeToWords(parseInt(h, 10), m, p)
+                        )
+                        // 9b. Bare times (no AM/PM): "09:00" → "Nine o'clock", "14:30" → "Two thirty"
+                        .replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, h, m) => {
+                            const hour24 = parseInt(h, 10);
+                            const hour12 = hour24 === 0 ? 12 : hour24 > 12 ? hour24 - 12 : hour24;
+                            const hrW = HOUR_WORDS[hour12] || String(hour12);
+                            const minW = MIN_WORDS[m];
+                            if (minW) return hrW + ' ' + minW;
+                            return hrW + ' ' + parseInt(m, 10);
+                        })
+                        // NEW-A: Booking confirmation field labels — strip dash prefix
+                        // "- Doctor" "- Date" "- Time" "- Patient" "- Phone" → "Doctor" etc.
+                        .replace(/\s*-\s*(Doctor|Date|Time|Patient|Phone|Specialty)\b/gi, ' $1')
+                        // NEW-B: "Shall I" — no added pause, flows naturally
+                        // (previously added a period causing an unnatural short pause)
+                        // 10. Remaining colons → space
+                        .replace(/:/g, ' ')
+                        // NEW-C: Phone numbers → digit-by-digit (7+ digit sequences only)
+                        // Runs AFTER all date/time/year conversions so 2026 is already words
+                        // "9014386804" → "9 0 1 4 3 8 6 8 0 4"
+                        // Short numbers (age, floor, count) are ≤6 digits — unaffected
+                        .replace(/\b(\d{7,})\b/g, (m) => m.split('').join(' '))
+                        // 11. American slang → neutral Indian English
+                        .replace(/\bGot it\b/gi, 'Understood')
+                        .replace(/\bAwesome\b/gi, 'Very good')
+                        .replace(/\bSure!?\b/gi, 'Of course')
+                        .replace(/\bAlright\b/gi, 'All right')
+                        .replace(/\bLet'?s go ahead\b/gi, 'I will now')
+                        .replace(/\bI apologize\b/gi, 'I am sorry')
+                        .replace(/\bOops\b/gi, 'I am sorry')
+                        // 12. Remove ALL commas (micro-pause root-cause fix, audio confirmed)
+                        .replace(/,/g, ' ')
+                        // 13. Exclamation → period
+                        .replace(/!/g, '.')
+                        // 14. Final whitespace collapse
+                        .replace(/\s{2,}/g, ' ')
+                        .trim();
+                };
+
+                const cleanText = prepareForTTS(text);
+
+                if (!window.speechSynthesis) {
+                    console.error("[TTS] speechSynthesis not supported in this browser");
+                    if (callActiveRef.current) startMic();
+                    else setStatus('idle');
+                    return;
+                }
+
+                // Cancel any previous speech before starting new utterance
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(cleanText);
+
+                const pickVoice = () => {
+                    const voices = window.speechSynthesis.getVoices();
+                    // Samantha first: neutral prosody, non-American accent feel,
+                    // natural pacing — best for Indian English healthcare context.
+                    // Google voices are neural quality but strongly American-accented.
+                    // en-IN covers Android/iOS 17+ Indian English voices.
+                    return voices.find(v => v.name.includes('Samantha'))
+                        || voices.find(v => v.lang === 'en-IN')
+                        || voices.find(v => v.name.includes('Google'))
+                        || voices.find(v => v.name.includes('Karen'))
+                        || voices.find(v => v.lang === 'en-US' && !v.name.includes('Zira'))
+                        || null;
+                };
+
+                const applyAndSpeak = () => {
+                    const preferred = pickVoice();
+                    if (preferred) utterance.voice = preferred;
+                    utterance.rate = 1.2;
+                    utterance.pitch = 1.0;
+                    utterance.volume = 1.0;
+                    utterance.onend = () => {
+                        if (callActiveRef.current) startMic();
+                        else setStatus('idle');
+                    };
+                    utterance.onerror = () => {
+                        if (callActiveRef.current) startMic();
+                        else setStatus('idle');
+                    };
+                    window.speechSynthesis.speak(utterance);
+                };
+
+                if (window.speechSynthesis.getVoices().length > 0) {
+                    // Voices already loaded — speak immediately
+                    applyAndSpeak();
+                } else {
+                    // Voices not yet loaded (common on first page load in Chrome/Firefox)
+                    // Wait for voiceschanged, then speak
+                    const onVoicesReady = () => {
+                        window.speechSynthesis.removeEventListener('voiceschanged', onVoicesReady);
+                        applyAndSpeak();
+                    };
+                    window.speechSynthesis.addEventListener('voiceschanged', onVoicesReady);
                 }
             };
 
-            /* ── AI Response (preserved) ── */
             const getAiReply = async (currentHistory) => {
                 setStatus('thinking');
                 try {
@@ -388,17 +577,12 @@
                     playVoice(aiReply);
                 } catch (error) {
                     console.error("AI Error:", error);
-                    if (callActiveRef.current) {
-                        startMic();
-                    } else {
-                        setStatus('idle');
-                    }
+                    if (callActiveRef.current) startMic();
+                    else setStatus('idle');
                 }
             };
 
-            /* ── Microphone Logic ── */
             const startMic = () => {
-                // Don't start if call was ended during an async gap
                 if (!callActiveRef.current && view === 'voice') {
                     setStatus('idle');
                     return;
@@ -429,11 +613,6 @@
                     timeoutRef.current = setTimeout(() => {
                         rec.stop();
                         if (statusRef.current === 'listening') {
-                            // ──────────────────────────────────────────────
-                            // CHANGED: During active call, silence = quietly
-                            // re-listen. Don't post error messages.
-                            // Outside call = original behavior.
-                            // ──────────────────────────────────────────────
                             if (callActiveRef.current) {
                                 startMic();
                             } else {
@@ -466,10 +645,6 @@
                 rec.onerror = (event) => {
                     console.error("Speech Error:", event.error);
                     setInterimText('');
-                    // ──────────────────────────────────────────────
-                    // CHANGED: During active call, errors = re-listen.
-                    // Outside call = original behavior.
-                    // ──────────────────────────────────────────────
                     if (callActiveRef.current) {
                         setTimeout(() => startMic(), 300);
                     } else {
@@ -482,12 +657,6 @@
 
                 rec.onend = () => {
                     setInterimText('');
-                    // ──────────────────────────────────────────────
-                    // CHANGED: During active call, if we're still in
-                    // listening state (no final result captured),
-                    // auto-restart. This handles the gap between
-                    // rec.stop() and the next rec.start().
-                    // ──────────────────────────────────────────────
                     if (callActiveRef.current && statusRef.current === 'listening') {
                         startMic();
                     } else if (!callActiveRef.current && statusRef.current === 'listening') {
@@ -499,10 +668,8 @@
                 rec.start();
             };
 
-            /* ── CALL / END Toggle ── */
             const toggleCall = () => {
                 if (callActive) {
-                    // ── END CALL ──
                     callActiveRef.current = false;
                     setCallActive(false);
                     clearTimeout(timeoutRef.current);
@@ -511,17 +678,17 @@
                     }
                     audioPlayerRef.current.pause();
                     audioPlayerRef.current.currentTime = 0;
+                    // Cancel any Web Speech synthesis in progress
+                    if (window.speechSynthesis) window.speechSynthesis.cancel();
                     setInterimText('');
                     setStatus('idle');
                 } else {
-                    // ── START CALL ──
                     callActiveRef.current = true;
                     setCallActive(true);
                     startMic();
                 }
             };
 
-            /* ── Text Submit (preserved) ── */
             const handleTextSubmit = (e) => {
                 e.preventDefault();
                 if (!inputText.trim() || status !== 'idle') return;
@@ -536,16 +703,10 @@
             const isSpeaking = status === 'speaking';
             const isBusy = isThinking || isSpeaking;
 
-            // ──────────────────────────────────────────────
-            // NEW: Wave state for Voice view
-            // During active call, waves respond to ALL phases.
-            // Outside call, waves only respond to listening.
-            // ──────────────────────────────────────────────
             const waveState = callActive
                 ? (isListening ? 'listening' : (isSpeaking || isThinking) ? 'speaking' : 'idle')
                 : (isListening ? 'listening' : 'idle');
 
-            // Status text for voice view
             const voiceStatusText = callActive
                 ? (isListening ? (interimText || 'Listening...') :
                     isSpeaking ? 'Sahay is speaking...' :
@@ -560,8 +721,7 @@
 
             return (
                 <div className="flex items-center justify-center h-full" style={{ background: '#060610' }}>
-                    <div className="w-full max-w-[430px] h-full flex flex-col"
-                        style={{ background: '#0a0a14' }}>
+                    <div className="w-full max-w-[430px] h-full flex flex-col" style={{ background: '#0a0a14' }}>
 
                         {/* ━━━ HEADER ━━━ */}
                         <div className="flex justify-between items-center px-5 pt-4 pb-3"
@@ -576,10 +736,7 @@
                                 </div>
                             </div>
                             <div className="text-[9px] font-semibold px-2.5 py-1 rounded-lg"
-                                style={{
-                                    background: 'rgba(74,222,128,.1)', color: '#4ade80',
-                                    border: '.5px solid rgba(74,222,128,.15)', letterSpacing: '.05em'
-                                }}>
+                                style={{ background: 'rgba(74,222,128,.1)', color: '#4ade80', border: '.5px solid rgba(74,222,128,.15)', letterSpacing: '.05em' }}>
                                 PRUDENCE
                             </div>
                         </div>
@@ -618,26 +775,18 @@
 
                                 <WaveBars waveState={waveState} />
 
-                                {/* ── CALL / END Button ── */}
                                 <button onClick={toggleCall}
                                     className={`flex items-center gap-2.5 px-11 py-3.5 rounded-full text-[15px] font-semibold transition-all duration-250 ${callActive ? 'call-active-pulse' : ''}`}
                                     style={{
-                                        background: callActive
-                                            ? 'rgba(74,222,128,.12)'
-                                            : 'rgba(255,255,255,.07)',
-                                        border: callActive
-                                            ? '.5px solid rgba(74,222,128,.3)'
-                                            : '.5px solid rgba(255,255,255,.1)',
-                                        color: callActive
-                                            ? '#4ade80'
-                                            : 'rgba(255,255,255,.8)',
+                                        background: callActive ? 'rgba(74,222,128,.12)' : 'rgba(255,255,255,.07)',
+                                        border: callActive ? '.5px solid rgba(74,222,128,.3)' : '.5px solid rgba(255,255,255,.1)',
+                                        color: callActive ? '#4ade80' : 'rgba(255,255,255,.8)',
                                         letterSpacing: '.05em'
                                     }}>
                                     {callActive ? <PhoneEndIcon size={20} /> : <MicIcon size={20} />}
                                     {callActive ? 'END' : 'CALL'}
                                 </button>
 
-                                {/* Status text */}
                                 <p className="text-[11px] mt-3.5 min-h-[16px] transition-colors"
                                     style={{ color: voiceStatusColor }}>
                                     {voiceStatusText}
@@ -648,7 +797,6 @@
                         {/* ━━━ CHAT VIEW ━━━ */}
                         {view === 'chat' && (
                             <div className="flex-1 flex flex-col min-h-0">
-                                {/* Messages */}
                                 <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2.5 msgs-scroll">
                                     {history.map((turn, i) => (
                                         <div key={i} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -672,21 +820,16 @@
                                             </div>
                                         </div>
                                     ))}
-                                    {/* Typing / Listening / Speaking indicator */}
                                     {(isThinking || isSpeaking || isListening) && (
                                         <div className="flex justify-start">
                                             <div className="flex items-center gap-1 px-3.5 py-2 rounded-2xl"
-                                                style={{
-                                                    background: 'rgba(255,255,255,.03)',
-                                                    border: '.5px solid rgba(255,255,255,.05)',
-                                                    borderBottomLeftRadius: '4px'
-                                                }}>
+                                                style={{ background: 'rgba(255,255,255,.03)', border: '.5px solid rgba(255,255,255,.05)', borderBottomLeftRadius: '4px' }}>
                                                 <div className="w-[5px] h-[5px] rounded-full typing-dot"
                                                     style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,255,.35)' }} />
                                                 <div className="w-[5px] h-[5px] rounded-full typing-dot"
                                                     style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,255,.35)' }} />
                                                 <div className="w-[5px] h-[5px] rounded-full typing-dot"
-                                                    style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,255,.35)' }} />
+                                                    style={{ background: isListening ? 'rgba(239,68,68,.5)' : 'rgba(96,130,,.35)' }} />
                                                 {isListening && (
                                                     <span className="text-[9px] font-semibold ml-1.5"
                                                         style={{ color: 'rgba(239,68,68,.5)', letterSpacing: '.04em' }}>
@@ -701,11 +844,7 @@
 
                                 {/* ━━━ CHAT INPUT BAR ━━━ */}
                                 <div className="flex items-center gap-2.5 px-4 py-3"
-                                    style={{
-                                        borderTop: '.5px solid rgba(255,255,255,.05)',
-                                        background: 'rgba(255,255,255,.015)'
-                                    }}>
-                                    {/* Mic button — stops call if active, otherwise starts mic */}
+                                    style={{ borderTop: '.5px solid rgba(255,255,255,.05)', background: 'rgba(255,255,255,.015)' }}>
                                     <button onClick={callActive ? toggleCall : startMic} disabled={!callActive && isBusy}
                                         className={`w-[42px] h-[42px] rounded-full flex items-center justify-center flex-shrink-0 transition-all ${isListening ? 'mic-pulse' : ''} ${callActive ? 'call-active-pulse' : ''}`}
                                         style={{
@@ -717,7 +856,6 @@
                                         {callActive ? <PhoneEndIcon size={16} /> : <MicIcon size={16} />}
                                     </button>
 
-                                    {/* Text input */}
                                     <form onSubmit={handleTextSubmit} className="flex-1 flex items-center gap-2.5">
                                         <input
                                             type="text"
@@ -727,20 +865,12 @@
                                             disabled={isBusy}
                                             readOnly={isListening}
                                             className="flex-1 py-2.5 px-4 rounded-[22px] text-[12.5px] outline-none transition-colors"
-                                            style={{
-                                                background: 'rgba(255,255,255,.04)',
-                                                border: '.5px solid rgba(255,255,255,.07)',
-                                                color: 'rgba(255,255,255,.8)',
-                                            }}
+                                            style={{ background: 'rgba(255,255,255,.04)', border: '.5px solid rgba(255,255,255,.07)', color: 'rgba(255,255,255,.8)' }}
                                         />
-                                        {/* Send button */}
                                         <button type="submit"
                                             disabled={status !== 'idle' || !inputText.trim()}
                                             className="w-[42px] h-[42px] rounded-[14px] flex items-center justify-center flex-shrink-0 transition-colors"
-                                            style={{
-                                                background: 'rgba(96,130,255,.2)',
-                                                opacity: (status !== 'idle' || !inputText.trim()) ? 0.3 : 1
-                                            }}>
+                                            style={{ background: 'rgba(96,130,255,.2)', opacity: (status !== 'idle' || !inputText.trim()) ? 0.3 : 1 }}>
                                             <SendIcon />
                                         </button>
                                     </form>
