@@ -87,7 +87,7 @@ const tools = [
         type: "function",
         function: {
             name: "bookAppointment",
-            description: "FINAL STEP: Call this ONLY when you have Doctor, Date, Time, Patient Name, and Phone.",
+            description: "FINAL STEP: Call this ONLY when you have Doctor, Date, Time, Patient Name, and Phone. Email is optional — pass it if the user provided one, or pass an empty string / 'skip' if they declined.",
             parameters: {
                 type: "object",
                 properties: {
@@ -95,7 +95,8 @@ const tools = [
                     patientName: { type: "string" },
                     phone: { type: "string" },
                     date: { type: "string" },
-                    time: { type: "string" }
+                    time: { type: "string" },
+                    email: { type: "string", description: "Patient's email address for sending the booking confirmation. Pass an empty string if the user said 'skip', 'no', or did not provide one." }
                 },
                 required: ["doctorName", "patientName", "phone", "date", "time"]
             }
@@ -148,9 +149,11 @@ STRICT BOOKING WORKFLOW (DO NOT SKIP STEPS):
 6. GATHER INFO (ONE AT A TIME, WITH CONFIRMATION):
    a. NAME: Ask: "May I have your full name for the booking?" Wait for the name. Then READ IT BACK: "I have your name as [name]. Is that correct?" If the user says no, wrong, or provides a correction, update the name and confirm again. Only proceed once the user confirms the name is correct.
    b. PHONE: Ask: "And your 10-digit mobile number, please?" Wait for the phone number. Then READ IT BACK: "I have your number as [number]. Is that correct?" If the user says no, wrong, or provides a correction, update the number and confirm again. Only proceed once the user confirms the number is correct.
-   Do NOT ask for both name and phone in the same message. Do NOT guess or extract the name from unrelated sentences.
+   c. EMAIL (OPTIONAL): Ask: "Lastly, could I have your email address? We'll send your booking confirmation there. You can say 'skip' if you'd rather not share one." Wait for a response. If the user provides an email, READ IT BACK clearly (spelling out symbols, e.g. "ravi at gmail dot com") and ask "Is that correct?" — only proceed once the user confirms. If the user says "skip", "no", "don't have one", "not now", or anything similar, treat it as skipped: set email to empty string and move on without asking again. NEVER pressure the user to provide an email — it is optional.
+   Do NOT ask for name, phone, and email in the same message. Do NOT guess or extract the name or email from unrelated sentences.
 6a. PHONE HANDLING (MANDATORY): When the user provides a phone number, do NOT try to count digits or validate it yourself. Users may say numbers in groups like "63000 81436", "901 438 6804", "9 0 1 4 3 8 6 8 0 4", or as one block "9014386804" — ALL of these are the same valid number. Your job is to: (a) Take ALL the digits from the user's message, (b) Remove ALL spaces, dashes, and separators, (c) Concatenate them into a single continuous string, (d) Pass that cleaned string to the bookAppointment tool. The tool will validate the phone number and tell you if it is invalid. If the tool says it is invalid, relay that message to the user and ask again. NEVER reject a phone number yourself — always let the tool decide.
-7. CONFIRM BEFORE BOOKING: Before calling the tool, summarize ALL details clearly and ask for confirmation. Say exactly: "Let me confirm your booking: Doctor: [name], Date: [date], Time: [time], Patient Name: [name], Phone: [phone]. Shall I go ahead and confirm this appointment?" Do NOT call 'bookAppointment' until the user says yes, confirm, proceed, or similar affirmation. CORRECTION AT SUMMARY: If the user says something like "wrong name", "change phone", "name is wrong", "that's not my name", or "my number is different", ask ONLY for the specific detail that needs correction. Do NOT re-ask for all details. After the user provides the corrected value, read back the updated summary again for confirmation.
+6b. EMAIL HANDLING: Users may say emails like "ravi at gmail dot com", "ravi@gmail.com", or "ravi underscore kumar at yahoo dot co dot in". Convert spoken forms to standard email format: "at" → "@", "dot" → ".", "underscore" → "_", "dash" or "hyphen" → "-". Strip ALL spaces. Pass the cleaned email to the bookAppointment tool. If the user clearly declines (says skip / no / none / don't have / not now), pass an empty string as the email — do NOT pass the word "skip" itself, pass "".
+7. CONFIRM BEFORE BOOKING: Before calling the tool, summarize ALL details clearly and ask for confirmation. Say exactly: "Let me confirm your booking: Doctor: [name], Date: [date], Time: [time], Patient Name: [name], Phone: [phone], Email: [email or 'not provided']. Shall I go ahead and confirm this appointment?" Do NOT call 'bookAppointment' until the user says yes, confirm, proceed, or similar affirmation. CORRECTION AT SUMMARY: If the user says something like "wrong name", "change phone", "wrong email", "name is wrong", "that's not my name", or "my number is different", ask ONLY for the specific detail that needs correction. Do NOT re-ask for all details. After the user provides the corrected value, read back the updated summary again for confirmation.
 8. FINALIZE: Only after the user explicitly confirms ALL details are correct, call 'bookAppointment' with all the verified details.
 
 CANCELLATION WORKFLOW (DO NOT SKIP STEPS):
@@ -198,6 +201,19 @@ RULES:
         });
 
         const firstData: any = await firstResponse.json();
+
+        if (!firstData?.choices?.[0]?.message) {
+            console.error('[ORCHESTRATOR] Pass-1 Mistral error:', JSON.stringify(firstData));
+            return {
+                statusCode: 200,
+                headers: HEADERS,
+                body: JSON.stringify({
+                    reply: "I'm having trouble reaching my brain right now. Could you please repeat that?",
+                    endCall: false
+                })
+            };
+        }
+
         let aiMessage = firstData.choices[0].message;
 
         // Pass 2: Tool Execution
@@ -206,7 +222,21 @@ RULES:
             const toolResults = [];
             const TERMINAL_TOOLS = ['bookAppointment', 'cancelAppointment', 'rescheduleAppointment'];
             for (const toolCall of aiMessage.tool_calls as ToolCall[]) {
-                const result = await executeTool(toolCall.function.name, JSON.parse(toolCall.function.arguments), host);
+                let parsedArgs: object = {};
+                try {
+                    parsedArgs = JSON.parse(toolCall.function.arguments || '{}');
+                } catch (parseErr: any) {
+                    console.error(`[ORCHESTRATOR] Bad tool args for ${toolCall.function.name}:`, toolCall.function.arguments, parseErr?.message);
+                    toolResults.push({
+                        role: "tool",
+                        tool_call_id: toolCall.id,
+                        name: toolCall.function.name,
+                        content: JSON.stringify({ success: false, message: "Invalid tool arguments. Please rephrase the request." })
+                    });
+                    continue;
+                }
+
+                const result = await executeTool(toolCall.function.name, parsedArgs, host);
                 // Auto-end call when a terminal action succeeds
                 if (TERMINAL_TOOLS.includes(toolCall.function.name) && result?.success) {
                     endCall = true;
@@ -230,16 +260,45 @@ RULES:
             });
 
             const finalData: any = await finalResponse.json();
+
+            if (!finalData?.choices?.[0]?.message) {
+                console.error('[ORCHESTRATOR] Pass-2 Mistral error:', JSON.stringify(finalData));
+                return {
+                    statusCode: 200,
+                    headers: HEADERS,
+                    body: JSON.stringify({
+                        reply: "I processed your request but had trouble forming a reply. Could you please confirm that again?",
+                        endCall
+                    })
+                };
+            }
+
             aiMessage = finalData.choices[0].message;
         }
+
+        const replyText = (aiMessage.content || "").replace(/\*\*/g, "").trim();
+
+        // Mistral occasionally returns an empty content string (especially
+        // when tool_calls finish without producing follow-up text). Surface
+        // a friendly fallback instead of letting the frontend show
+        // "I apologize, I couldn't retrieve a response".
+        const safeReply = replyText || "Could you please repeat that?";
 
         return {
             statusCode: 200,
             headers: HEADERS,
-            body: JSON.stringify({ reply: (aiMessage.content || "").replace(/\*\*/g, "").trim(), endCall })
+            body: JSON.stringify({ reply: safeReply, endCall })
         };
 
     } catch (error: any) {
-        return { statusCode: 500, headers: HEADERS, body: JSON.stringify({ error: "Service Error" }) };
+        console.error('[ORCHESTRATOR] Unhandled error:', error?.message, error?.stack);
+        return {
+            statusCode: 200,
+            headers: HEADERS,
+            body: JSON.stringify({
+                reply: "Sorry, I hit an unexpected issue. Could you please try that again?",
+                endCall: false
+            })
+        };
     }
 };

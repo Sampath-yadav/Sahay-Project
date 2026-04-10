@@ -1,5 +1,6 @@
 import { Handler } from '@netlify/functions';
 import { supabase } from './lib/supabaseClient';
+import { sendEmail, buildAppointmentEmail, isValidEmail } from './lib/sendEmail';
 
 const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -105,7 +106,7 @@ export const handler: Handler = async (event) => {
     }
 
     try {
-        const { doctorName, patientName, date, time, phone } = JSON.parse(event.body || '{}');
+        const { doctorName, patientName, date, time, phone, email } = JSON.parse(event.body || '{}');
 
         // ──────────────────────────────────────────────
         // 1. INPUT VALIDATION
@@ -262,8 +263,13 @@ export const handler: Handler = async (event) => {
 
         // ──────────────────────────────────────────────
         // 8. INSERT APPOINTMENT
-        // Uses normalized date, time, and cleaned phone
+        // Uses normalized date, time, cleaned phone, and (optionally)
+        // a validated email address. Email is nullable in the schema.
         // ──────────────────────────────────────────────
+        const rawEmail = typeof email === 'string' ? email.trim() : '';
+        const isSkipWord = /^(skip|no|none|n\/a|na)$/i.test(rawEmail);
+        const persistedEmail = rawEmail && !isSkipWord && isValidEmail(rawEmail) ? rawEmail : null;
+
         const { error: insertError } = await supabase
             .from('appointments')
             .insert({
@@ -272,10 +278,34 @@ export const handler: Handler = async (event) => {
                 appointment_date: resolvedDate,
                 appointment_time: normalizedTime,
                 phone: phoneCheck.cleaned,
+                email: persistedEmail,
                 status: 'confirmed'
             });
 
         if (insertError) throw insertError;
+
+        // ──────────────────────────────────────────────
+        // 9. SEND CONFIRMATION EMAIL (best-effort, optional)
+        // The booking is already persisted; an email failure must NOT
+        // roll it back or surface an error to the patient. Reuses
+        // `persistedEmail` from step 8 — null means the patient skipped
+        // or provided an invalid address.
+        // ──────────────────────────────────────────────
+        let emailSent = false;
+
+        if (persistedEmail) {
+            const { subject, html, text } = buildAppointmentEmail({
+                patientName: patientName.trim(),
+                doctorName: doctor.name,
+                date: resolvedDate,
+                time: normalizedTime
+            });
+
+            const emailResult = await sendEmail({ to: persistedEmail, subject, html, text });
+            emailSent = emailResult.ok;
+        } else if (rawEmail && !isSkipWord) {
+            console.warn(`[BOOKING] Skipping email — invalid address "${rawEmail}"`);
+        }
 
         return {
             statusCode: 200, headers,
@@ -286,9 +316,12 @@ export const handler: Handler = async (event) => {
                     doctor: doctor.name,
                     patient: patientName.trim(),
                     date: resolvedDate,
-                    time: normalizedTime
+                    time: normalizedTime,
+                    emailSent
                 },
-                instruction: "Confirm the booking details to the user and end the conversation politely."
+                instruction: emailSent
+                    ? "Confirm the booking details to the user, mention that a confirmation email has been sent to their email address, and end the conversation politely."
+                    : "Confirm the booking details to the user and end the conversation politely. Do not mention email."
             })
         };
 
