@@ -126,6 +126,9 @@ export const handler: Handler = async (event: HandlerEvent) => {
 
     try {
         const apiKey = process.env.MISTRAL_API_KEY;
+        if (!apiKey) {
+            console.error('[ORCHESTRATOR] MISTRAL_API_KEY is not set. Add it to .env (local) or Netlify env vars (deployed).');
+        }
         const body = JSON.parse(event.body || '{}');
         const history: HistoryItem[] = body.history || [];
         const host = event.headers['x-forwarded-host'] || event.headers.host || DEFAULT_HOST;
