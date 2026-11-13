@@ -1,7 +1,14 @@
 import { Handler, HandlerEvent } from '@netlify/functions';
 
 // --- CONSTANTS & CONFIGURATION ---
-const MISTRAL_MODEL = "mistral-small-latest";
+// Models are tried in order. If one is rate-limited (HTTP 429) or unavailable
+// on the account/plan, the next one is used. Override the first with MISTRAL_MODEL.
+const MISTRAL_MODELS = [
+    process.env.MISTRAL_MODEL || "mistral-small-latest",
+    "open-mistral-nemo",
+    "ministral-8b-latest",
+    "ministral-3b-latest"
+];
 const DEFAULT_HOST = 'sahayhealth.netlify.app';
 
 const HEADERS = {
@@ -121,6 +128,35 @@ async function executeTool(name: string, args: object, host: string): Promise<an
     }
 }
 
+/**
+ * Calls Mistral chat completions, falling back through MISTRAL_MODELS on
+ * 429 / 5xx / network errors. Returns { data, status, rateLimited }.
+ */
+async function callMistral(apiKey: string | undefined, payload: object): Promise<{ data: any; status: number; rateLimited: boolean }> {
+    let lastStatus = 0;
+    let lastData: any = null;
+    let sawRateLimit = false;
+    for (const model of MISTRAL_MODELS) {
+        try {
+            const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...payload, model })
+            });
+            const data: any = await res.json().catch(() => null);
+            lastStatus = res.status;
+            lastData = data;
+            if (data?.choices?.[0]?.message) return { data, status: res.status, rateLimited: false };
+            if (res.status === 429) sawRateLimit = true;
+            console.error(`[ORCHESTRATOR] Mistral ${model} -> ${res.status}:`, JSON.stringify(data));
+            if (res.status === 401) break; // bad key: other models will fail too
+        } catch (err: any) {
+            console.error(`[ORCHESTRATOR] Mistral ${model} network error:`, err?.message);
+        }
+    }
+    return { data: lastData, status: lastStatus, rateLimited: sawRateLimit };
+}
+
 export const handler: Handler = async (event: HandlerEvent) => {
     if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: HEADERS, body: '' };
 
@@ -144,7 +180,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
 Today is ${dayOfWeek}, ${todayStr}.
 
 STRICT BOOKING WORKFLOW (DO NOT SKIP STEPS):
-1. SELECT DOCTOR: Suggest a doctor based on symptoms or name.
+1. SELECT DOCTOR: Suggest a doctor based on symptoms or name. ALWAYS call 'getDoctorDetails' to look up real doctors; NEVER say no doctors exist without calling it. The 'specialty' argument MUST be exactly one of: Cardiologist, Dermatologist, ENT Specialist, Endocrinologist, General Physician, Internal Medicine, Nephrology, Neurologist, Ophthalmologist, Orthopedic, Psychologist, Pulmonologist, Radiology, Surgical Gastroenterology, Surgical Oncology, Urology. Map symptoms to a specialty (e.g. skin rash or acne -> Dermatologist, chest pain -> Cardiologist, fever or cold -> General Physician, headache or seizures -> Neurologist, joint or bone pain -> Orthopedic, eye problems -> Ophthalmologist, ear/nose/throat -> ENT Specialist, kidney issues -> Nephrology, stress or anxiety -> Psychologist). Never pass a symptom as the specialty.
 2. MANDATORY DATE REQUEST: Once the user agrees to a doctor, you MUST ask: "On which date would you like to book the appointment?"
 3. LOCK DATE: DO NOT call 'getAvailableSlots' until the user provides a specific date (e.g., "Tomorrow", "January 26", or "25/01/2026").
 4. SHOW PERIODS: After getting the date, call 'getAvailableSlots' for that specific date and show Morning/Afternoon/Evening options.
@@ -191,27 +227,22 @@ RULES:
         ];
 
         // Pass 1: Reasoning
-        const firstResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: MISTRAL_MODEL,
-                messages: messages,
-                tools: tools,
-                tool_choice: "auto",
-                temperature: 0.1
-            })
+        const first = await callMistral(apiKey, {
+            messages: messages,
+            tools: tools,
+            tool_choice: "auto",
+            temperature: 0.1
         });
-
-        const firstData: any = await firstResponse.json();
+        const firstData: any = first.data;
 
         if (!firstData?.choices?.[0]?.message) {
-            console.error('[ORCHESTRATOR] Pass-1 Mistral error:', JSON.stringify(firstData));
             return {
                 statusCode: 200,
                 headers: HEADERS,
                 body: JSON.stringify({
-                    reply: "I'm having trouble reaching my brain right now. Could you please repeat that?",
+                    reply: first.rateLimited
+                        ? "I'm getting a lot of requests right now. Please give me a few seconds and say that again."
+                        : "I'm having trouble reaching my brain right now. Could you please repeat that?",
                     endCall: false
                 })
             };
@@ -252,17 +283,11 @@ RULES:
                 });
             }
 
-            const finalResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: MISTRAL_MODEL,
-                    messages: [...messages, aiMessage, ...toolResults],
-                    temperature: 0.7
-                })
+            const final = await callMistral(apiKey, {
+                messages: [...messages, aiMessage, ...toolResults],
+                temperature: 0.7
             });
-
-            const finalData: any = await finalResponse.json();
+            const finalData: any = final.data;
 
             if (!finalData?.choices?.[0]?.message) {
                 console.error('[ORCHESTRATOR] Pass-2 Mistral error:', JSON.stringify(finalData));
